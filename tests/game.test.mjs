@@ -256,7 +256,11 @@ assert(Object.keys(upgrades).length === 20);
 assert(g.props.length > 100);
 assert(g.props.some((p) => p.type === 'pool'));
 assert(g.props.some((p) => p.type === 'court'));
-assert(g.blocked(-300, -300));
+const firstHouse = g.props.find((p) => p.type === 'house');
+assert(firstHouse);
+assert(
+  g.blocked(firstHouse.x + firstHouse.w / 2, firstHouse.y + firstHouse.d / 2),
+);
 assert(!g.blocked(0, 0));
 console.log(
   'All 11 new upgrade effects, caps, reset, and map collision checks passed.',
@@ -277,3 +281,39 @@ for (let i = 0; i < 100; i++) salvage.kill(salvage.unit(200, i, 1, 0));
 const chips = salvage.xpDrops.reduce((a, p) => a + p.value, 0);
 assert(chips > 100 && chips < 200);
 console.log('Bonus-XP and extended targeting behavior passed.');
+
+const world = fresh();
+world.mapSeed = 123456789;
+world.makeMap();
+const distantBlock = JSON.stringify(world.generateChunk(37, -24));
+assert.equal(JSON.stringify(world.generateChunk(37, -24)), distantBlock);
+assert.notEqual(JSON.stringify(world.generateChunk(38, -24)), distantBlock);
+world.player.x = 250_000;
+world.player.y = -180_000;
+world.ensureChunks();
+assert.equal(world.chunks.size, 25);
+assert.equal(world.loadedChunkX, 625);
+assert.equal(world.loadedChunkY, -450);
+assert(world.props.some((p) => Math.abs(p.x - world.player.x) < 1_000));
+assert(world.props.some((p) => p.type === 'house'));
+assert(world.props.some((p) => ['pool', 'court', 'garden'].includes(p.type)));
+for (let step = 0; step < 30; step++) {
+  world.player.x += 10_000;
+  world.player.y -= 7_000;
+  world.ensureChunks();
+  assert.equal(world.chunks.size, 25);
+}
+const travel = fresh();
+travel.move(travel.player, 123_456, -50);
+assert(travel.player.x > 100_000);
+travel.ensureChunks();
+travel.spawnEnemy();
+assert(
+  Math.hypot(
+    travel.enemies[0].x - travel.player.x,
+    travel.enemies[0].y - travel.player.y,
+  ) < 400,
+);
+console.log(
+  'Deterministic endless chunks, bounded streaming, long travel, and distant spawning passed.',
+);

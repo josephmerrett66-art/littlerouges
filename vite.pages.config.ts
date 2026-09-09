@@ -5,7 +5,7 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
   base: '/littlerouges/',
-  root: 'pages',
+  root: 'github-pages',
   publicDir: resolve(import.meta.dirname, 'public'),
   resolve: {
     alias: {

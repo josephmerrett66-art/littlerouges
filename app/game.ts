@@ -11,6 +11,7 @@ export type Snapshot = {
   time: number;
   choices: string[];
   wave: number;
+  sector: string;
 };
 type V = { x: number; y: number };
 type Unit = V & {
@@ -200,6 +201,9 @@ export class Game {
   xpDrops: (V & { value: number })[] = [];
   particles: Particle[] = [];
   props: Prop[] = [];
+  chunks = new Map<string, Prop[]>();
+  mapSeed = 824731;
+  readonly chunkSize = 400;
   keys = new Set<string>();
   stick = { x: 0, y: 0 };
   time = 0;
@@ -225,6 +229,9 @@ export class Game {
   pulseVisual = 0;
   arcs: { a: V; b: V; life: number }[] = [];
   colliders: Prop[] = [];
+  collisionGrid = new Map<string, Prop[]>();
+  loadedChunkX = Number.NaN;
+  loadedChunkY = Number.NaN;
   shot = 0;
   peak = 1;
   spawn = 0;
@@ -320,6 +327,7 @@ export class Game {
     }
     this.audio?.resume().catch(() => {});
     this.seed = Date.now() >>> 0;
+    this.mapSeed = this.seed;
     this.uid = 0;
     this.player = this.unit(0, 0, 100, 0);
     this.robots = [];
@@ -354,6 +362,7 @@ export class Game {
     this.spawn = 0.2;
     this.choices = [];
     this.camera = { x: 0, y: 0 };
+    this.makeMap();
     this.keys.clear();
     this.stick = { x: 0, y: 0 };
     this.mode = 'playing';
@@ -379,6 +388,7 @@ export class Game {
       kills: this.kills,
       time: this.time,
       wave: this.wave,
+      sector: `${Math.floor(this.player.x / this.chunkSize)} · ${Math.floor(this.player.y / this.chunkSize)}`,
       choices: [...this.choices],
     });
   }
@@ -493,6 +503,27 @@ export class Game {
   }
   makeMap() {
     this.props = [];
+    this.colliders = [];
+    this.collisionGrid.clear();
+    this.loadedChunkX = Number.NaN;
+    this.loadedChunkY = Number.NaN;
+    this.chunks.clear();
+    this.ensureChunks(true);
+  }
+  mapHash(x: number, y: number, salt = 0) {
+    let n =
+      Math.imul(x, 1597334677) ^ Math.imul(y, 3812015801) ^ this.mapSeed ^ salt;
+    n = Math.imul(n ^ (n >>> 16), 2246822507);
+    n = Math.imul(n ^ (n >>> 13), 3266489909);
+    return (n ^ (n >>> 16)) >>> 0;
+  }
+  generateChunk(cx: number, cy: number) {
+    const list: Prop[] = [];
+    let state = this.mapHash(cx, cy);
+    const rand = () => {
+      state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+      return state / 4294967296;
+    };
     const add = (
       type: string,
       x: number,
@@ -502,96 +533,179 @@ export class Game {
       h = 10,
       color = '#729569',
       variant = 0,
-    ) => this.props.push({ type, x, y, w, d, h, color, variant });
-    const homes = [
-      [-310, -310, 122, 95, 46, '#e4c499'],
-      [190, -310, 110, 90, 52, '#c4d5ce'],
-      [-310, 190, 120, 90, 43, '#dcb6a2'],
-      [190, 190, 104, 100, 48, '#e6d69f'],
-    ] as const;
-    homes.forEach(([x, y, w, d, h, color], i) => {
-      add('house', x, y, w, d, h, color, i);
+    ) => list.push({ type, x, y, w, d, h, color, variant });
+    const ox = cx * this.chunkSize;
+    const oy = cy * this.chunkSize;
+    const archetype = this.mapHash(cx, cy, 91) % 7;
+    const colors = [
+      '#e4c499',
+      '#c4d5ce',
+      '#dcb6a2',
+      '#e6d69f',
+      '#b9c9ad',
+      '#d9c1a7',
+    ];
+    const makeHome = (x: number, y: number, variant: number) => {
+      const w = 100 + Math.floor(rand() * 22);
+      const d = 82 + Math.floor(rand() * 17);
+      const h = 43 + Math.floor(rand() * 11);
+      const color = colors[variant % colors.length];
+      add('house', x, y, w, d, h, color, variant);
       for (let j = 0; j < 8; j++) {
         if (j === 4) continue;
         add('fence', x - 25 + j * 22, y + 134, 19, 3, 12, '#e8dfb6');
       }
-      add('mailbox', x + w + 26, y + 38, 9, 9, 22, '#839f9a', i);
+      add('mailbox', x + w + 26, y + 38, 9, 9, 22, '#839f9a', variant);
       add('bin', x + w + 12, y + 76, 9, 9, 13, '#4d826d');
       add('bin', x + w + 25, y + 79, 9, 9, 13, '#6e92b6');
-      add('tree', x - 28, y + 10, 20, 20, 40, '#4e855b', i);
-      add('tree', x + w + 45, y - 8, 20, 20, 44, '#5e8f58', i + 1);
-      add('planter', x + 8, y + d + 5, 24, 9, 5, '#b47d63', i);
-      add('planter', x + 75, y + d + 5, 24, 9, 5, '#b47d63', i + 1);
+      add('tree', x - 28, y + 10, 20, 20, 40, '#4e855b', variant);
+      add('tree', x + w + 45, y - 8, 20, 20, 44, '#5e8f58', variant + 1);
+      add('planter', x + 8, y + d + 5, 24, 9, 5, '#b47d63', variant);
+      add('planter', x + 75, y + d + 5, 24, 9, 5, '#b47d63', variant + 1);
       add('porch', x + w, y + 24, 24, 32, 4, '#d5c4a1');
       add('hedge', x - 13, y + 85, 10, 35, 13, '#557e51');
       add('hose', x + w + 6, y + 108, 18, 18, 2, '#548a6d');
-    });
-    // Four recognizable gardens around the same open road network.
-    add('pool', -163, -300, 66, 100, 2, '#68b9bd');
-    add('chair', -155, -182, 13, 25, 9, '#eee0b5');
-    add('chair', -130, -182, 13, 25, 9, '#eee0b5');
-    add('umbrella', -104, -180, 26, 26, 36, '#e5b976');
-    add('court', 110, -204, 137, 109, 0, '#b17f6d');
-    add('hoop', 174, -200, 4, 4, 40, '#e5e0c5');
-    add('bench', 260, -150, 30, 11, 15, '#ba9c6c');
-    add('garden', -175, 208, 70, 95, 0, '#785c46');
-    add('shed', -164, 332, 43, 35, 26, '#8e9b79');
-    add('wheelbarrow', -106, 307, 20, 15, 12, '#b48c63');
-    add('flowers', 110, 207, 50, 92, 0, '#c98e9e');
-    add('birdbath', 133, 331, 15, 15, 21, '#b9c6b7');
-    add('bench', 99, 160, 34, 11, 15, '#b5a47b');
-    add('sign', 76, 76, 26, 3, 32, '#638f83', 0);
-    add('sign', -83, -86, 22, 3, 25, '#bb6a5c', 1);
-    for (const [x, y, c] of [
-      [-42, -230, '#d39371'],
-      [30, 215, '#9fc2c4'],
-      [238, -43, '#e8c876'],
-      [-212, 30, '#d5debe'],
-      [-40, 360, '#a4adb9'],
-    ] as [number, number, string][])
-      add('car', x, y, 21, 39, 15, c);
-    for (const [x, y] of [
-      [70, -130],
-      [-80, 130],
-      [72, 340],
-      [-80, -365],
-      [-350, 72],
-      [340, -80],
-    ]) {
-      add('lamp', x, y, 4, 4, 50, '#4a6467');
-      add('flowers', x + 9, y + 3, 17, 13, 0, '#e5c181');
-    }
-    for (const [x, y] of [
-      [-72, 80],
-      [85, -73],
-      [-72, -150],
-      [330, 70],
-    ])
-      add('hydrant', x, y, 7, 7, 12, '#c98563');
-    for (let i = 0; i < 26; i++) {
-      const a = (i / 26) * Math.PI * 2;
-      add(
-        'tree',
-        Math.cos(a) * 433,
-        Math.sin(a) * 433,
-        18,
-        18,
-        38 + (i % 3) * 6,
-        i % 3 === 0 ? '#bba166' : i % 2 ? '#498162' : '#678d57',
-        i % 4,
+    };
+    if (archetype !== 3)
+      makeHome(
+        ox + 82 + rand() * 18,
+        oy + 74 + rand() * 18,
+        this.mapHash(cx, cy, 7) % 6,
       );
+    if (archetype === 0) {
+      add('pool', ox + 220, oy + 86, 62, 112, 2, '#68b9bd');
+      add('chair', ox + 217, oy + 218, 13, 25, 9, '#eee0b5');
+      add('umbrella', ox + 254, oy + 225, 26, 26, 36, '#e5b976');
+    } else if (archetype === 1) {
+      add('court', ox + 174, oy + 188, 128, 100, 0, '#b17f6d');
+      add('hoop', ox + 236, oy + 188, 4, 4, 40, '#e5e0c5');
+    } else if (archetype === 2) {
+      add('garden', ox + 205, oy + 188, 78, 108, 0, '#785c46');
+      add('shed', ox + 235, oy + 302, 43, 32, 26, '#8e9b79');
+      add('wheelbarrow', ox + 188, oy + 306, 20, 15, 12, '#b48c63');
+    } else if (archetype === 3) {
+      add('flowers', ox + 105, oy + 112, 72, 88, 0, '#c98e9e');
+      add('birdbath', ox + 202, oy + 155, 15, 15, 21, '#b9c6b7');
+      add('bench', ox + 184, oy + 220, 34, 11, 15, '#b5a47b');
+      add('pool', ox + 235, oy + 105, 55, 75, 1, '#729fa8');
+      for (let i = 0; i < 7; i++)
+        add(
+          'tree',
+          ox + 85 + ((i * 37) % 220),
+          oy + 78 + ((i * 71) % 235),
+          18,
+          18,
+          38 + (i % 3) * 6,
+          i % 2 ? '#498162' : '#678d57',
+          i,
+        );
+    } else if (archetype === 4) {
+      add('flowers', ox + 198, oy + 185, 70, 92, 0, '#e0a2b0');
+      add('birdbath', ox + 280, oy + 215, 15, 15, 21, '#b9c6b7');
+      add('bench', ox + 190, oy + 296, 34, 11, 15, '#b5a47b');
+    } else if (archetype === 5) {
+      add('court', ox + 205, oy + 208, 92, 78, 0, '#a98470');
+      add('hoop', ox + 248, oy + 208, 4, 4, 40, '#e5e0c5');
+    } else {
+      add('garden', ox + 212, oy + 205, 66, 87, 0, '#785c46');
+      add('bench', ox + 182, oy + 302, 34, 11, 15, '#b5a47b');
     }
-    for (let i = 0; i < 14; i++) {
-      const x = -425 + ((i * 79) % 820),
-        y = i % 2 ? -397 : 394;
-      add('rock', x, y, 9, 7, 5, '#9ba68a');
-    }
-    this.colliders = this.props.filter(
-      (p) => p.type === 'house' || p.type === 'car',
+    const carColors = ['#d39371', '#9fc2c4', '#e8c876', '#d5debe', '#a4adb9'];
+    if (rand() < 0.72)
+      add(
+        'car',
+        ox - 38 + rand() * 16,
+        oy + 120 + rand() * 150,
+        21,
+        39,
+        15,
+        carColors[Math.floor(rand() * carColors.length)],
+      );
+    if (rand() < 0.48)
+      add(
+        'car',
+        ox + 120 + rand() * 145,
+        oy - 38 + rand() * 16,
+        39,
+        21,
+        15,
+        carColors[Math.floor(rand() * carColors.length)],
+      );
+    add('lamp', ox + 69, oy + 72, 4, 4, 50, '#4a6467');
+    add('flowers', ox + 78, oy + 74, 17, 13, 0, '#e5c181');
+    add('hydrant', ox + 326, oy + 70, 7, 7, 12, '#c98563');
+    add(
+      'sign',
+      ox + 74,
+      oy + 65,
+      26,
+      3,
+      32,
+      '#638f83',
+      Math.abs(cx + cy * 3) % 6,
     );
+    if ((cx + cy) % 3 === 0)
+      add('sign', ox - 76, oy - 82, 22, 3, 25, '#bb6a5c', -1);
+    for (let i = 0; i < 5; i++)
+      add(
+        'rock',
+        ox + 75 + rand() * 245,
+        oy + 72 + rand() * 250,
+        7 + rand() * 5,
+        6 + rand() * 4,
+        5,
+        '#9ba68a',
+      );
+    return list;
+  }
+  ensureChunks(force = false) {
+    const cx = Math.floor(this.player.x / this.chunkSize);
+    const cy = Math.floor(this.player.y / this.chunkSize);
+    if (!force && cx === this.loadedChunkX && cy === this.loadedChunkY) return;
+    this.loadedChunkX = cx;
+    this.loadedChunkY = cy;
+    let changed = force;
+    for (let x = cx - 2; x <= cx + 2; x++)
+      for (let y = cy - 2; y <= cy + 2; y++) {
+        const key = `${x},${y}`;
+        if (!this.chunks.has(key)) {
+          this.chunks.set(key, this.generateChunk(x, y));
+          changed = true;
+        }
+      }
+    for (const key of [...this.chunks.keys()]) {
+      const [x, y] = key.split(',').map(Number);
+      if (Math.abs(x - cx) > 2 || Math.abs(y - cy) > 2) {
+        this.chunks.delete(key);
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.props = [...this.chunks.values()].flat();
+      this.colliders = this.props.filter(
+        (p) => p.type === 'house' || p.type === 'car',
+      );
+      this.collisionGrid.clear();
+      for (const p of this.colliders) {
+        const left = Math.floor((p.x - 7) / 100);
+        const right = Math.floor((p.x + p.w + 7) / 100);
+        const top = Math.floor((p.y - 7) / 100);
+        const bottom = Math.floor((p.y + p.d + 7) / 100);
+        for (let gx = left; gx <= right; gx++)
+          for (let gy = top; gy <= bottom; gy++) {
+            const key = `${gx},${gy}`;
+            const cell = this.collisionGrid.get(key);
+            if (cell) cell.push(p);
+            else this.collisionGrid.set(key, [p]);
+          }
+      }
+    }
   }
   blocked(x: number, y: number) {
-    return this.colliders.some(
+    const nearby =
+      this.collisionGrid.get(`${Math.floor(x / 100)},${Math.floor(y / 100)}`) ||
+      [];
+    return nearby.some(
       (p) =>
         (p.type === 'house' || p.type === 'car') &&
         x > p.x - 7 &&
@@ -601,8 +715,8 @@ export class Game {
     );
   }
   move(u: V, dx: number, dy: number) {
-    const x = clamp(u.x + dx, -465, 465),
-      y = clamp(u.y + dy, -465, 465);
+    const x = u.x + dx,
+      y = u.y + dy;
     if (!this.blocked(x, u.y)) u.x = x;
     if (!this.blocked(u.x, y)) u.y = y;
   }
@@ -649,8 +763,8 @@ export class Game {
     for (let i = 0; i < 25; i++) {
       const a = this.random() * 6.28,
         r = 210 + this.random() * 85;
-      x = clamp(this.player.x + Math.cos(a) * r, -450, 450);
-      y = clamp(this.player.y + Math.sin(a) * r, -450, 450);
+      x = this.player.x + Math.cos(a) * r;
+      y = this.player.y + Math.sin(a) * r;
       if (!this.blocked(x, y) && dist(this.player, { x, y }) > 150) break;
     }
     if (this.blocked(x, y)) return;
@@ -695,6 +809,7 @@ export class Game {
   update(dt: number) {
     if (this.mode !== 'playing') return;
     this.time += dt;
+    this.ensureChunks();
     this.wave = 1 + Math.floor(this.time / 30);
     this.invuln = Math.max(0, this.invuln - dt);
     let sx =
@@ -1565,86 +1680,110 @@ export class Game {
         this.ctx.stroke();
         break;
       }
-      case 'sign':
+      case 'sign': {
+        const streetNames = [
+          'MAPLE AVE',
+          'CIRCUIT ST',
+          'PIXEL PL',
+          'ROBOT RD',
+          'BINARY BLVD',
+          'JACARANDA',
+        ];
+        const stop = p.variant === -1;
         box(11, 0, 3, 3, p.h, '#59726b');
         box(0, -1, w, 2, 10, color, p.h - 3);
         this.labelWorld(
-          p.variant ? 'STOP' : 'MAPLE AVE',
+          stop
+            ? 'STOP'
+            : streetNames[Math.abs(p.variant || 0) % streetNames.length],
           x + w / 2,
           y,
           p.h + 2,
           '#f2e7c9',
-          p.variant ? 5 : 6,
+          stop ? 5 : 6,
         );
-        if (!p.variant) {
+        if (!stop) {
           box(9, -9, 2, 23, 7, '#638f83', p.h - 12);
         }
         break;
+      }
       case 'rock':
         box(0, 0, w, d, 4, color);
         box(2, 1, w - 3, d - 2, 2, '#b1b49a', 4);
         break;
     }
   }
-  drawGroundDetails() {
-    // Concrete sidewalk joints, drains, road repairs and garden paths.
-    for (let i = -490; i < 500; i += 24) {
-      this.worldLine(
-        [
-          { x: -65, y: i },
-          { x: -51, y: i },
-        ],
-        '#a1ad93',
-      );
-      this.worldLine(
-        [
-          { x: 51, y: i },
-          { x: 65, y: i },
-        ],
-        '#a1ad93',
-      );
-      this.worldLine(
-        [
-          { x: i, y: -65 },
-          { x: i, y: -51 },
-        ],
-        '#a1ad93',
-      );
-      this.worldLine(
-        [
-          { x: i, y: 51 },
-          { x: i, y: 65 },
-        ],
-        '#a1ad93',
-      );
+  drawGroundDetails(minX: number, minY: number, maxX: number, maxY: number) {
+    const firstRoadX = Math.floor(minX / this.chunkSize) * this.chunkSize;
+    const firstRoadY = Math.floor(minY / this.chunkSize) * this.chunkSize;
+    // Sidewalk seams continue across chunk boundaries so generated blocks join cleanly.
+    for (let road = firstRoadX; road <= maxX; road += this.chunkSize) {
+      for (let y = Math.floor(minY / 24) * 24; y < maxY; y += 24) {
+        this.worldLine(
+          [
+            { x: road - 65, y },
+            { x: road - 51, y },
+          ],
+          '#a1ad93',
+        );
+        this.worldLine(
+          [
+            { x: road + 51, y },
+            { x: road + 65, y },
+          ],
+          '#a1ad93',
+        );
+      }
+      for (let y = Math.floor(minY / 44) * 44; y < maxY; y += 44) {
+        const fromIntersection = Math.abs(
+          ((y % this.chunkSize) + this.chunkSize) % this.chunkSize,
+        );
+        if (fromIntersection > 75 && fromIntersection < this.chunkSize - 75)
+          this.ground(road - 1, y, 2, 20, '#c5c9ae');
+      }
     }
-    for (const [x, y] of [
-      [-45, -115],
-      [36, 120],
-      [-170, 36],
-      [180, -44],
-    ]) {
-      this.ground(x, y, 9, 14, '#576f71');
-      for (let j = 0; j < 4; j++)
-        this.ground(x + 1, y + 2 + j * 3, 7, 1, '#a4aaa0');
+    for (let road = firstRoadY; road <= maxY; road += this.chunkSize) {
+      for (let x = Math.floor(minX / 24) * 24; x < maxX; x += 24) {
+        this.worldLine(
+          [
+            { x, y: road - 65 },
+            { x, y: road - 51 },
+          ],
+          '#a1ad93',
+        );
+        this.worldLine(
+          [
+            { x, y: road + 51 },
+            { x, y: road + 65 },
+          ],
+          '#a1ad93',
+        );
+      }
+      for (let x = Math.floor(minX / 44) * 44; x < maxX; x += 44) {
+        const fromIntersection = Math.abs(
+          ((x % this.chunkSize) + this.chunkSize) % this.chunkSize,
+        );
+        if (fromIntersection > 75 && fromIntersection < this.chunkSize - 75)
+          this.ground(x, road - 1, 20, 2, '#c5c9ae');
+      }
     }
-    for (const [x, y] of [
-      [24, -160],
-      [-24, 160],
-      [300, 20],
-      [-280, -21],
-    ]) {
-      this.ground(x, y, 13, 12, '#697e81');
-      this.worldLine(
-        [
-          { x, y },
-          { x: x + 7, y: y + 4 },
-          { x: x + 3, y: y + 10 },
-          { x: x + 14, y: y + 17 },
-        ],
-        '#576e72',
-      );
-    }
+    // Crosswalks, drains and road wear are derived from intersection coordinates.
+    for (let gx = firstRoadX; gx <= maxX; gx += this.chunkSize)
+      for (let gy = firstRoadY; gy <= maxY; gy += this.chunkSize) {
+        for (let i = 0; i < 5; i++) {
+          this.ground(gx - 43 + i * 18, gy - 77, 10, 20, '#e3dec0');
+          this.ground(gx + 60, gy - 43 + i * 18, 20, 10, '#e3dec0');
+        }
+        const flip =
+          this.mapHash(gx / this.chunkSize, gy / this.chunkSize, 55) % 2;
+        const dx = gx + (flip ? 35 : -45);
+        const dy = gy + (flip ? 115 : -125);
+        this.ground(dx, dy, 9, 14, '#576f71');
+        for (let j = 0; j < 4; j++)
+          this.ground(dx + 1, dy + 2 + j * 3, 7, 1, '#a4aaa0');
+        if ((gx / this.chunkSize + gy / this.chunkSize) % 2 === 0)
+          this.labelWorld('SLOW', gx - 8, gy - 110, 0, '#d9d3b5', 8);
+      }
     for (const h of this.props.filter((p) => p.type === 'house')) {
       const pathX = h.x + h.w + 27;
       this.ground(h.x + h.w, h.y + 24, 41, 29, '#c1bea0');
@@ -1654,7 +1793,6 @@ export class Game {
       for (let j = 0; j < 5; j++)
         this.ground(h.x + 7 + j * 24, h.y + h.d + 22, 11, 40, '#88a16c');
     }
-    this.labelWorld('SLOW', -8, -110, 0, '#d9d3b5', 8);
   }
   sprite(u: Unit, robot: boolean, leader = false) {
     const p = this.project(u.x, u.y),
@@ -1752,10 +1890,16 @@ export class Game {
     c.fillRect(0, 0, this.w, this.h);
     this.camera.x += (this.player.x - this.camera.x) * 0.1;
     this.camera.y += (this.player.y - this.camera.y) * 0.1;
-    this.ground(-500, -500, 1000, 1000, '#75966b');
-    for (let x = -480; x < 500; x += 40)
-      for (let y = -480; y < 500; y += 40) {
-        const n = Math.abs((x * 17 + y * 37) % 11);
+    this.ensureChunks();
+    const viewRange = 720 / this.zoom;
+    const minX = Math.floor((this.camera.x - viewRange) / 40) * 40;
+    const minY = Math.floor((this.camera.y - viewRange) / 40) * 40;
+    const maxX = this.camera.x + viewRange;
+    const maxY = this.camera.y + viewRange;
+    this.ground(minX, minY, maxX - minX + 40, maxY - minY + 40, '#75966b');
+    for (let x = minX; x < maxX; x += 40)
+      for (let y = minY; y < maxY; y += 40) {
+        const n = this.mapHash(Math.floor(x / 40), Math.floor(y / 40), 19) % 11;
         this.ground(
           x,
           y,
@@ -1765,23 +1909,19 @@ export class Game {
         );
         if (n % 3 === 0) this.ground(x + 12, y + 8, 2, 5, '#9fb47b');
       }
-    this.ground(-65, -500, 130, 1000, '#c0c3a2');
-    this.ground(-500, -65, 1000, 130, '#c0c3a2');
-    this.ground(-50, -500, 100, 1000, '#75868a');
-    this.ground(-500, -50, 1000, 100, '#75868a');
-    this.ground(-48, -500, 3, 1000, '#88999a');
-    this.ground(-500, -48, 1000, 3, '#88999a');
-    for (let i = -470; i < 500; i += 44) {
-      if (Math.abs(i) > 75) {
-        this.ground(-1, i, 2, 20, '#c5c9ae');
-        this.ground(i, -1, 20, 2, '#c5c9ae');
-      }
+    const firstRoadX = Math.floor(minX / this.chunkSize) * this.chunkSize;
+    const firstRoadY = Math.floor(minY / this.chunkSize) * this.chunkSize;
+    for (let x = firstRoadX; x <= maxX; x += this.chunkSize) {
+      this.ground(x - 65, minY, 130, maxY - minY, '#c0c3a2');
+      this.ground(x - 50, minY, 100, maxY - minY, '#75868a');
+      this.ground(x - 48, minY, 3, maxY - minY, '#88999a');
     }
-    for (let i = 0; i < 5; i++) {
-      this.ground(-43 + i * 18, -77, 10, 20, '#e3dec0');
-      this.ground(60, -43 + i * 18, 20, 10, '#e3dec0');
+    for (let y = firstRoadY; y <= maxY; y += this.chunkSize) {
+      this.ground(minX, y - 65, maxX - minX, 130, '#c0c3a2');
+      this.ground(minX, y - 50, maxX - minX, 100, '#75868a');
+      this.ground(minX, y - 48, maxX - minX, 3, '#88999a');
     }
-    this.drawGroundDetails();
+    this.drawGroundDetails(minX, minY, maxX, maxY);
     for (const p of this.props)
       if (['pool', 'court', 'garden', 'flowers'].includes(p.type))
         this.drawDetail(p);

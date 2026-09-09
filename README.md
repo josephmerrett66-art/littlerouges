@@ -31,4 +31,6 @@ The tests exercise automatic combat, XP, paused upgrades, all upgrade effects, d
 
 Maplewood now has four distinct gardens (pool, basketball court, vegetables, and flowers), individually colored shingled homes, shutters, porches, mailboxes, lights, hydrants, benches, sidewalk joints, drainage grates, and road wear. Decorative objects preserve the open traversal routes; houses and parked cars remain solid.
 
+The neighborhood is procedurally generated and endless. A deterministic street grid streams a bounded five-by-five window of blocks around the player, combining homes, pools, courts, gardens, parks, cars, and street furniture. Sector coordinates appear in the HUD, and revisiting a location during a run recreates the same block without retaining the whole explored world in memory.
+
 There are 20 upgrades. New choices add a lead-robot spread shot, piercing rounds, slowing shots, chain lightning, EMP, a rechargeable hit shield, bonus XP, map-wide XP collection, longer targeting range, follower armor, and orbiting satellites. Limited upgrades disappear when maxed. All upgrades reset on a new run.

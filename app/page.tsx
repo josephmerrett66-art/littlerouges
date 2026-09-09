@@ -32,6 +32,7 @@ const initial: Snapshot = {
   time: 0,
   choices: [],
   wave: 1,
+  sector: '0 · 0',
 };
 export default function Home() {
   const canvas = useRef<HTMLCanvasElement>(null),
@@ -76,7 +77,7 @@ export default function Home() {
           </span>
         </a>
         <span className="edition">
-          SWARM SURVIVAL <i /> PROTOTYPE 02
+          SWARM SURVIVAL <i /> PROTOTYPE 03
         </span>
         <div className="tools">
           <button
@@ -161,7 +162,7 @@ export default function Home() {
           </div>
         </div>
         <div className="location">
-          <i /> MAP 01 <span> / </span> MAPLEWOOD SUBURBS
+          <i /> SECTOR {s.sector} <span> / </span> MAPLEWOOD SUBURBS
         </div>
         {s.mode === 'ready' && (
           <div className="start-panel">
