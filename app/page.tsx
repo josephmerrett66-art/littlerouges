@@ -69,7 +69,7 @@ export default function Home() {
   return (
     <main className="shell">
       <header className="topbar">
-        <a className="brand" href="/" aria-label="Tiny Uprising home">
+        <a className="brand" href="./" aria-label="Tiny Uprising home">
           <Bot size={27} />
           <span>
             TINY<span className="mint">UPRISING</span>
