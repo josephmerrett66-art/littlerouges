@@ -193,6 +193,9 @@ export default function Home() {
             Collect the glowing chips to grow your army.
           </div>
         )}
+        {s.mode === 'playing' && s.time >= 50 && s.time < 68 && (
+          <div className="hint">Incoming artillery! Leave the marked circles before they ignite.</div>
+        )}
         <div
           ref={stick}
           className="joystick"

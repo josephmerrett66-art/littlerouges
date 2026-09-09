@@ -323,6 +323,25 @@ assert(chips > 100 && chips < 200);
 console.log('Bonus-XP and extended targeting behavior passed.');
 
 const world = fresh();
+const artillery = fresh();
+artillery.strikeCd = 0;
+artillery.update(1 / 60);
+assert.equal(artillery.strikes.length, 1);
+const marked = artillery.strikes[0];
+assert.equal(artillery.player.hp, 100, 'Artillery warning deals no damage');
+artillery.player.x = 70;
+for (let i = 0; i < 170; i++) artillery.update(1 / 60);
+assert.equal(marked.x, 0, 'Marked area must not follow the player');
+assert.equal(artillery.player.hp, 100, 'Leaving the marker avoids artillery');
+artillery.player.x = 0;
+for (let i = 0; i < 50; i++) artillery.update(1 / 60);
+assert(artillery.player.hp < 100, 'Lingering fire damages camping players');
+const frozenLife = marked.life;
+artillery.pause(); artillery.update(1);
+assert.equal(marked.life, frozenLife, 'Artillery pauses with the game');
+artillery.start();
+assert.equal(artillery.strikes.length, 0);
+assert.equal(artillery.strikeCd, 55);
 // Check many block variants: amenities have room beyond homes and their fences.
 for (let cx = -15; cx <= 15; cx++) for (let cy = -15; cy <= 15; cy++) {
   const block = world.generateChunk(cx, cy);

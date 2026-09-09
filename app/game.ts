@@ -244,6 +244,8 @@ export class Game {
   orbitCd = 0;
   pulseVisual = 0;
   arcs: { a: V; b: V; life: number }[] = [];
+  strikes: (V & { radius: number; warning: number; life: number; tick: number })[] = [];
+  strikeCd = 55;
   colliders: Prop[] = [];
   collisionGrid = new Map<string, Prop[]>();
   loadedChunkX = Number.NaN;
@@ -371,6 +373,8 @@ export class Game {
     this.orbitCd = 0;
     this.pulseVisual = 0;
     this.arcs = [];
+    this.strikes = [];
+    this.strikeCd = 55;
     this.explosive = false;
     this.shot = 0;
     this.peak = 1;
@@ -843,6 +847,13 @@ export class Game {
     const radius = 40 + (r.id % 7) * 10;
     let vx = (this.player.x + Math.cos(angle) * radius - r.x) * 0.65;
     let vy = (this.player.y + Math.sin(angle) * radius - r.y) * 0.65;
+    for (const strike of this.strikes) {
+      const dx = r.x - strike.x, dy = r.y - strike.y, d = Math.hypot(dx, dy);
+      if (d < strike.radius + 30) {
+        vx += (d > 0.01 ? dx / d : Math.cos(phase)) * 240;
+        vy += (d > 0.01 ? dy / d : Math.sin(phase)) * 240;
+      }
+    }
     for (const e of this.enemies) {
       if (e.hp <= 0) continue;
       const dx = r.x - e.x, dy = r.y - e.y, d = Math.hypot(dx, dy);
@@ -907,6 +918,37 @@ export class Game {
       (sx + sy) * this.speed * dt,
       (sy - sx) * this.speed * dt,
     );
+    // Human artillery targets the last observed position, never tracks after marking.
+    // A visible warning makes relocation a readable decision, not an idle penalty.
+    this.strikeCd -= dt;
+    if (this.strikeCd <= 0) {
+      this.strikeCd = Math.max(6, 11 - this.time / 120);
+      this.strikes.push({ x: this.player.x, y: this.player.y,
+        radius: Math.min(43, 32 + this.time / 90), warning: 2.2, life: 3.2, tick: 0 });
+      this.sound(440, 0.14, 'sine');
+    }
+    for (const strike of this.strikes) {
+      if (strike.warning > 0) {
+        strike.warning -= dt;
+        if (strike.warning <= 0) this.burst(strike.x, strike.y, '#ffb16c', 22);
+        continue;
+      }
+      strike.life -= dt;
+      strike.tick -= dt;
+      if (strike.tick <= 0) {
+        strike.tick = 0.8;
+        if (dist(this.player, strike) < strike.radius && this.invuln <= 0) {
+          if (this.ranks.shield && this.shieldCd <= 0) this.shieldCd = 12;
+          else this.player.hp -= 18;
+          this.invuln = 0.65;
+          this.player.hit = 0.2;
+        }
+        for (const bot of this.robots) if (dist(bot, strike) < strike.radius) {
+          bot.hp -= 10; bot.hit = 0.2;
+        }
+      }
+    }
+    this.strikes = this.strikes.filter((strike) => strike.life > 0);
     this.player.hp = Math.min(
       this.player.max,
       this.player.hp + (this.repairs * dt) / 3,
@@ -2004,6 +2046,23 @@ export class Game {
     for (const p of this.props)
       if (['pool', 'court', 'garden', 'flowers'].includes(p.type))
         this.drawDetail(p);
+    for (const strike of this.strikes) {
+      const active = strike.warning <= 0;
+      const points = Array.from({ length: 33 }, (_, i) => {
+        const a = i / 32 * Math.PI * 2;
+        return { x: strike.x + Math.cos(a) * strike.radius, y: strike.y + Math.sin(a) * strike.radius, z: 1 };
+      });
+      this.worldLine(points, active ? '#ff824f' : '#ffe094', active ? 3 : 2);
+      this.labelWorld(active ? 'FIRE' : 'INCOMING', strike.x, strike.y, 2, '#fff0c1', 7);
+      if (active) {
+        for (let i = 0; i < 12; i++) {
+          const a = i * 2.39996, radius = Math.sqrt(i / 12) * strike.radius * 0.85;
+          const p = this.project(strike.x + Math.cos(a)*radius, strike.y + Math.sin(a)*radius, 2);
+          c.fillStyle = i % 2 ? '#ffd477' : '#ff855a';
+          c.fillRect(p.x, p.y - 3, 2, 3 + Math.sin(this.time * 10 + i)*2);
+        }
+      }
+    }
     for (const p of this.xpDrops) {
       const v = this.project(p.x, p.y, 3 + Math.sin(this.time * 4 + p.x) * 1.5);
       c.fillStyle = '#437e7844';
