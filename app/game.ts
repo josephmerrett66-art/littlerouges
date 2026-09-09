@@ -595,16 +595,16 @@ export class Game {
         this.mapHash(cx, cy, 7) % 6,
       );
     if (archetype === 0) {
-      add('pool', ox + 220, oy + 86, 62, 112, 2, '#68b9bd');
-      add('chair', ox + 217, oy + 218, 13, 25, 9, '#eee0b5');
-      add('umbrella', ox + 254, oy + 225, 26, 26, 36, '#e5b976');
+      add('pool', ox + 210, oy + 250, 76, 65, 2, '#68b9bd');
+      add('chair', ox + 180, oy + 262, 13, 25, 9, '#eee0b5');
+      add('umbrella', ox + 135, oy + 271, 26, 26, 36, '#e5b976');
     } else if (archetype === 1) {
-      add('court', ox + 174, oy + 188, 128, 100, 0, '#b17f6d');
-      add('hoop', ox + 236, oy + 188, 4, 4, 40, '#e5e0c5');
+      add('court', ox + 170, oy + 246, 128, 80, 0, '#b17f6d');
+      add('hoop', ox + 232, oy + 246, 4, 4, 40, '#e5e0c5');
     } else if (archetype === 2) {
-      add('garden', ox + 205, oy + 188, 78, 108, 0, '#785c46');
-      add('shed', ox + 235, oy + 302, 43, 32, 26, '#8e9b79');
-      add('wheelbarrow', ox + 188, oy + 306, 20, 15, 12, '#b48c63');
+      add('garden', ox + 215, oy + 246, 78, 78, 0, '#785c46');
+      add('shed', ox + 100, oy + 270, 43, 32, 26, '#8e9b79');
+      add('wheelbarrow', ox + 166, oy + 290, 20, 15, 12, '#b48c63');
     } else if (archetype === 3) {
       add('flowers', ox + 105, oy + 112, 72, 88, 0, '#c98e9e');
       add('birdbath', ox + 202, oy + 155, 15, 15, 21, '#b9c6b7');
@@ -622,15 +622,15 @@ export class Game {
           i,
         );
     } else if (archetype === 4) {
-      add('flowers', ox + 198, oy + 185, 70, 92, 0, '#e0a2b0');
-      add('birdbath', ox + 280, oy + 215, 15, 15, 21, '#b9c6b7');
-      add('bench', ox + 190, oy + 296, 34, 11, 15, '#b5a47b');
+      add('flowers', ox + 210, oy + 246, 70, 72, 0, '#e0a2b0');
+      add('birdbath', ox + 300, oy + 260, 15, 15, 21, '#b9c6b7');
+      add('bench', ox + 151, oy + 288, 34, 11, 15, '#b5a47b');
     } else if (archetype === 5) {
-      add('court', ox + 205, oy + 208, 92, 78, 0, '#a98470');
-      add('hoop', ox + 248, oy + 208, 4, 4, 40, '#e5e0c5');
+      add('court', ox + 205, oy + 246, 92, 78, 0, '#a98470');
+      add('hoop', ox + 248, oy + 246, 4, 4, 40, '#e5e0c5');
     } else {
-      add('garden', ox + 212, oy + 205, 66, 87, 0, '#785c46');
-      add('bench', ox + 182, oy + 302, 34, 11, 15, '#b5a47b');
+      add('garden', ox + 224, oy + 246, 66, 78, 0, '#785c46');
+      add('bench', ox + 161, oy + 286, 34, 11, 15, '#b5a47b');
     }
     const carColors = ['#d39371', '#9fc2c4', '#e8c876', '#d5debe', '#a4adb9'];
     if (rand() < 0.72)
@@ -678,7 +678,15 @@ export class Game {
         5,
         '#9ba68a',
       );
-    return list;
+    // Reserve the full amenity footprint, including coping and a walking gap.
+    // Decorative scatter must never land inside water, courts, beds or homes.
+    const reserved = list.filter((p) => ['house', 'pool', 'court', 'garden', 'flowers', 'shed'].includes(p.type));
+    return list.filter((p) => {
+      if (!['rock', 'tree'].includes(p.type)) return true;
+      return !reserved.some((a) =>
+        p.x - 6 < a.x + a.w + 10 && p.x + p.w + 6 > a.x - 10 &&
+        p.y - 6 < a.y + a.d + 10 && p.y + p.d + 6 > a.y - 10);
+    });
   }
   ensureChunks(force = false) {
     const cx = Math.floor(this.player.x / this.chunkSize);
@@ -1460,32 +1468,24 @@ export class Game {
       for (const dx of [0, 12])
         this.box(p.x + dx, p.y, 3, 3, 13, '#eee7b6', '#c7cba1', '#a8b891');
     } else if (p.type === 'car') {
-      this.box(p.x, p.y, p.w, p.d, 8, p.color, '#a8b2a0', '#748980', 4);
-      this.box(
-        p.x + 2,
-        p.y + 9,
-        p.w - 4,
-        20,
-        7,
-        '#bdd8cf',
-        '#537784',
-        '#426574',
-        12,
-      );
-      this.box(
-        p.x + 2,
-        p.y + 14,
-        p.w - 4,
-        9,
-        2,
-        p.color,
-        p.color,
-        '#7b9288',
-        19,
-      );
-      for (const dy of [6, 30])
-        this.box(p.x - 2, p.y + dy, 4, 7, 5, '#32464a', '#253b40', '#21373c');
-      this.box(p.x + 2, p.y - 1, 5, 2, 3, '#ffeeac', '#ffeb9c', '#d7cb87', 7);
+      // Every component uses the same 21-by-39 local chassis coordinates.
+      const horizontal = p.w > p.d;
+      const part = (x: number, y: number, w: number, d: number, h: number,
+        top: string, left: string, right: string, z = 0) => {
+        this.box(p.x + (horizontal ? y : x), p.y + (horizontal ? x : y),
+          horizontal ? d : w, horizontal ? w : d, h, top, left, right, z);
+      };
+      for (const y of [6, 29]) part(-1, y, 4, 7, 6, '#32464a', '#253b40', '#21373c');
+      part(0, 0, 21, 39, 8, p.color, '#7b9288', '#607d78', 4);
+      part(2, 10, 17, 19, 6, '#bdd8cf', '#537784', '#426574', 12);
+      part(2, 15, 17, 9, 2, p.color, p.color, '#7b9288', 18);
+      for (const y of [6, 29]) part(18, y, 4, 7, 6, '#32464a', '#253b40', '#21373c');
+      part(1, 0, 19, 2, 2, '#b6c7c0', '#91aaa4', '#718f89', 4);
+      part(1, 37, 19, 2, 2, '#b6c7c0', '#91aaa4', '#718f89', 4);
+      for (const x of [2, 14]) {
+        part(x, 0, 5, 2, 3, '#ffeeac', '#ffeb9c', '#d7cb87', 8);
+        part(x, 37, 5, 2, 3, '#d88373', '#b86961', '#95564f', 8);
+      }
     } else if (p.type !== 'bin') {
       this.drawDetail(p);
     } else {
@@ -1549,7 +1549,7 @@ export class Game {
         this.ground(x - 7, y - 7, w + 14, d + 14, '#ddd2ab');
         this.ground(x, y, w, d, '#488c9c');
         this.ground(x + 3, y + 3, w - 6, d - 6, '#73c1c4');
-        for (let i = 0; i < 8; i++)
+        for (let i = 0; 8 + i * 10 < d - 5; i++)
           this.ground(
             x + 8 + (i % 2) * 7,
             y + 8 + i * 10,
@@ -1636,9 +1636,9 @@ export class Game {
       case 'garden':
         this.ground(x - 4, y - 4, w + 8, d + 8, '#c5b792');
         this.ground(x, y, w, d, '#775f48');
-        for (let row = 0; row < 5; row++) {
+        for (let row = 0; 5 + row * 18 + 11 < d - 3; row++) {
           this.ground(x + 4, y + 5 + row * 18, w - 8, 11, '#655342');
-          for (let j = 0; j < 7; j++) {
+          for (let j = 0; 6 + j * 9 + 5 < w - 3; j++) {
             box(
               6 + j * 9,
               7 + row * 18,

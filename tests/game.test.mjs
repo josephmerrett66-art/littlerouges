@@ -323,6 +323,31 @@ assert(chips > 100 && chips < 200);
 console.log('Bonus-XP and extended targeting behavior passed.');
 
 const world = fresh();
+// Check many block variants: amenities have room beyond homes and their fences.
+for (let cx = -15; cx <= 15; cx++) for (let cy = -15; cy <= 15; cy++) {
+  const block = world.generateChunk(cx, cy);
+  for (const amenity of block.filter((p) => ['pool', 'court', 'garden'].includes(p.type))) {
+    for (const home of block.filter((p) => ['house', 'porch', 'fence'].includes(p.type))) {
+      assert(!(amenity.x - 8 < home.x + home.w + 8 && amenity.x + amenity.w + 8 > home.x - 8 &&
+        amenity.y - 8 < home.y + home.d + 8 && amenity.y + amenity.d + 8 > home.y - 8),
+        `Amenity overlaps ${home.type} in block ${cx},${cy}`);
+    }
+  }
+}
+// Both road orientations must rotate the entire car, including wheels and lights.
+const renderCar = (w, d) => {
+  const boxes = [];
+  const renderer = { ctx: {}, ground() {}, box(...args) { boxes.push(args); } };
+  Game.prototype.drawProp.call(renderer, { x: 0, y: 0, w, d, h: 15, type: 'car', color: '#abc' });
+  return boxes;
+};
+const verticalCar = renderCar(21, 39), horizontalCar = renderCar(39, 21);
+assert.equal(verticalCar.length, horizontalCar.length);
+verticalCar.forEach((part, i) => {
+  assert.deepEqual(horizontalCar[i], [part[1], part[0], part[3], part[2], ...part.slice(4)]);
+  assert(part[0] >= -1 && part[0] + part[2] <= 22 && part[1] >= 0 && part[1] + part[3] <= 39);
+});
+console.log('961 landscape blocks have clear amenities; both car orientations remain intact.');
 world.mapSeed = 123456789;
 world.makeMap();
 const distantBlock = JSON.stringify(world.generateChunk(37, -24));
