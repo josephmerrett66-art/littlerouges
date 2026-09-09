@@ -68,6 +68,7 @@ g.pause();
 g.player.hp = 1;
 g.enemies = [g.unit(g.player.x, g.player.y, 100, 0)];
 g.invuln = 0;
+g.shieldCd = 12;
 g.update(0.016);
 assert.equal(g.mode, 'dead');
 g.start();
@@ -149,3 +150,130 @@ console.log(
 assert(stress.robots.length <= 99);
 assert(stress.enemies.length <= 190);
 assert(stress.particles.length <= 700);
+
+// New upgrades must alter combat, not merely appear in the choice pool.
+const fresh = () => {
+  const g = make();
+  g.start();
+  g.spawn = 999;
+  g.player.cd = 999;
+  return g;
+};
+const equip = (g, id) => {
+  g.mode = 'upgrade';
+  g.choices = [id];
+  g.choose(id);
+};
+const shield = fresh();
+equip(shield, 'shield');
+shield.enemies = [shield.unit(0, 0, 100, 0)];
+shield.update(0.016);
+assert.equal(shield.player.hp, 100);
+assert(shield.shieldCd > 11);
+shield.invuln = 0;
+shield.update(0.016);
+assert(shield.player.hp < 100);
+const piercing = fresh();
+equip(piercing, 'pierce');
+equip(piercing, 'frost');
+piercing.player.cd = 0;
+const e1 = piercing.unit(35, 0, 1000, 0),
+  e2 = piercing.unit(55, 0, 1000, 0);
+piercing.enemies = [e1, e2];
+for (let i = 0; i < 15; i++) piercing.update(1 / 60);
+assert(e1.hp < 1000 && e2.hp < 1000);
+assert(e1.slow > 0 && e2.slow > 0);
+const multi = fresh();
+equip(multi, 'multishot');
+multi.player.cd = 0;
+multi.enemies = [multi.unit(100, 0, 1000, 0)];
+multi.update(0.016);
+assert.equal(multi.bullets.length, 3);
+const emp = fresh();
+equip(emp, 'emp');
+emp.enemies = [emp.unit(40, 0, 1000, 0)];
+emp.pulseCd = 0;
+emp.update(0.016);
+assert(emp.enemies[0].hp < 1000 && emp.enemies[0].slow > 0);
+const chain = fresh();
+equip(chain, 'chain');
+chain.player.cd = 0;
+chain.shot = 3;
+chain.enemies = [chain.unit(30, 0, 1000, 0), chain.unit(30, 35, 1000, 0)];
+for (let i = 0; i < 6; i++) chain.update(1 / 60);
+assert(chain.enemies[1].hp < 1000);
+assert(chain.arcs.length > 0);
+const orbit = fresh();
+equip(orbit, 'orbit');
+orbit.enemies = [orbit.unit(43, 0, 1000, 0)];
+orbit.update(0.016);
+assert(orbit.enemies[0].hp < 1000);
+assert.equal(orbit.orbitPositions().length, 2);
+const armor = fresh();
+armor.addRobots(1);
+armor.robots[0].hp = 1;
+equip(armor, 'armor');
+assert.equal(armor.robots[0].hp, 70);
+armor.addRobots(1);
+assert.equal(armor.robots[1].hp, 70);
+const vacuum = fresh();
+vacuum.xpDrops = [{ x: 300, y: 300, value: 4 }];
+equip(vacuum, 'magnet');
+assert.equal(vacuum.xp, 4);
+assert.equal(vacuum.xpDrops.length, 0);
+assert.equal(vacuum.magnet, 99);
+for (const id of [
+  'multishot',
+  'frost',
+  'chain',
+  'emp',
+  'shield',
+  'salvage',
+  'explode',
+])
+  equip(vacuum, id);
+vacuum.xp = vacuum.nextXp;
+vacuum.checkLevel();
+assert(
+  vacuum.choices.every(
+    (id) =>
+      ![
+        'multishot',
+        'frost',
+        'chain',
+        'emp',
+        'shield',
+        'salvage',
+        'explode',
+      ].includes(id),
+  ),
+);
+vacuum.start();
+assert.deepEqual(vacuum.ranks, {});
+assert.equal(vacuum.range, 155);
+assert.equal(vacuum.botHealth, 45);
+assert(Object.keys(upgrades).length === 20);
+assert(g.props.length > 100);
+assert(g.props.some((p) => p.type === 'pool'));
+assert(g.props.some((p) => p.type === 'court'));
+assert(g.blocked(-300, -300));
+assert(!g.blocked(0, 0));
+console.log(
+  'All 11 new upgrade effects, caps, reset, and map collision checks passed.',
+);
+
+const longRange = fresh();
+equip(longRange, 'range');
+assert.equal(longRange.range, 193.75);
+longRange.player.cd = 0;
+longRange.enemies = [longRange.unit(180, 0, 1000, 0)];
+longRange.update(0.016);
+assert(longRange.bullets.length > 0);
+assert(longRange.bullets[0].life > 0.7);
+const salvage = fresh();
+equip(salvage, 'salvage');
+salvage.seed = 42;
+for (let i = 0; i < 100; i++) salvage.kill(salvage.unit(200, i, 1, 0));
+const chips = salvage.xpDrops.reduce((a, p) => a + p.value, 0);
+assert(chips > 100 && chips < 200);
+console.log('Bonus-XP and extended targeting behavior passed.');

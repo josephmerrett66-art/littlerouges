@@ -26,3 +26,9 @@ The tests exercise automatic combat, XP, paused upgrades, all upgrade effects, d
 ## Implementation
 
 `app/game.ts` owns the simulation, procedural pixel rendering, collision, and synthesized audio. `app/page.tsx` owns the responsive HUD, joystick, accessible upgrade dialogs, and optional WebMCP controls. Art is drawn by the canvas engine, with no downloaded assets or runtime API dependencies. There is one map and no permanent progression. Browser audio starts after the first user interaction.
+
+## Expanded neighborhood and upgrades
+
+Maplewood now has four distinct gardens (pool, basketball court, vegetables, and flowers), individually colored shingled homes, shutters, porches, mailboxes, lights, hydrants, benches, sidewalk joints, drainage grates, and road wear. Decorative objects preserve the open traversal routes; houses and parked cars remain solid.
+
+There are 20 upgrades. New choices add a lead-robot spread shot, piercing rounds, slowing shots, chain lightning, EMP, a rechargeable hit shield, bonus XP, map-wide XP collection, longer targeting range, follower armor, and orbiting satellites. Limited upgrades disappear when maxed. All upgrades reset on a new run.

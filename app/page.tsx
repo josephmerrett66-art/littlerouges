@@ -76,7 +76,7 @@ export default function Home() {
           </span>
         </a>
         <span className="edition">
-          SWARM SURVIVAL <i /> PROTOTYPE 01
+          SWARM SURVIVAL <i /> PROTOTYPE 02
         </span>
         <div className="tools">
           <button

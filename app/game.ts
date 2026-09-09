@@ -20,6 +20,7 @@ type Unit = V & {
   hit: number;
   type: number;
   id: number;
+  slow?: number;
 };
 type Bullet = V & {
   vx: number;
@@ -27,6 +28,9 @@ type Bullet = V & {
   life: number;
   damage: number;
   enemy: boolean;
+  hits: number[];
+  pierce: number;
+  frost: boolean;
 };
 type Particle = V & {
   vx: number;
@@ -42,6 +46,7 @@ type Prop = V & {
   h: number;
   type: string;
   color: string;
+  variant?: number;
 };
 export const upgrades: Record<
   string,
@@ -104,6 +109,82 @@ export const upgrades: Record<
     icon: '⇢',
     description: 'Move 15% faster. Increase XP pickup range by 20%.',
   },
+  multishot: {
+    name: 'Forked Process',
+    tag: 'CORE WEAPON',
+    icon: '⋔',
+    description:
+      'Your lead robot fires two extra bolts in a spread. Side bolts deal 65% damage.',
+  },
+  pierce: {
+    name: 'Railgun Rounds',
+    tag: 'PROJECTILES',
+    icon: '↠',
+    description:
+      'Every robot’s bolts pierce one additional human. Stack up to 3 times.',
+  },
+  frost: {
+    name: 'Cold Boot',
+    tag: 'CROWD CONTROL',
+    icon: '❄',
+    description:
+      'All bolts slow humans by 45% for 2 seconds. Keep the crowd at arm’s length.',
+  },
+  chain: {
+    name: 'Static Discharge',
+    tag: 'CHAIN LIGHTNING',
+    icon: 'ϟ',
+    description:
+      'Every fourth hit arcs to up to 3 nearby humans for 60% laser damage.',
+  },
+  emp: {
+    name: 'Please Reboot',
+    tag: 'EMP PULSE',
+    icon: '◎',
+    description:
+      'Every 7 seconds, emit a pulse that damages and slows nearby humans.',
+  },
+  shield: {
+    name: 'Firewall',
+    tag: 'DEFENSE',
+    icon: '◇',
+    description:
+      'Block one hit, then recharge after 12 seconds. A blue ring shows when it’s ready.',
+  },
+  salvage: {
+    name: 'Data Hoarder',
+    tag: 'EXPERIENCE',
+    icon: '▣',
+    description: 'Defeated humans have a 35% chance to drop double XP.',
+  },
+  magnet: {
+    name: 'Vacuum Cleaner',
+    tag: 'COLLECTION',
+    icon: '⊕',
+    description:
+      'Increase XP attraction range by 50%. Collect all chips already on the map.',
+  },
+  range: {
+    name: 'Long-Distance Wi-Fi',
+    tag: 'TARGETING',
+    icon: '⌁',
+    description:
+      'Every robot targets 25% farther away. Bolts travel farther too. Stack twice.',
+  },
+  armor: {
+    name: 'Bubble-Wrap Bots',
+    tag: 'SWARM DEFENSE',
+    icon: '▤',
+    description:
+      'All current and future followers gain 25 health. Repair the entire swarm.',
+  },
+  orbit: {
+    name: 'Satellite Friends',
+    tag: 'ORBITAL WEAPON',
+    icon: '◉',
+    description:
+      'Two tiny satellites circle your core, damaging humans they touch. Stack 3 times.',
+  },
 };
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
 const dist = (a: V, b: V) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -135,6 +216,15 @@ export class Game {
   convert = 0;
   explosive = false;
   repairs = 0;
+  ranks: Record<string, number> = {};
+  range = 155;
+  botHealth = 45;
+  shieldCd = 0;
+  pulseCd = 7;
+  orbitCd = 0;
+  pulseVisual = 0;
+  arcs: { a: V; b: V; life: number }[] = [];
+  colliders: Prop[] = [];
   shot = 0;
   peak = 1;
   spawn = 0;
@@ -249,6 +339,14 @@ export class Game {
     this.magnet = 66;
     this.convert = 0;
     this.repairs = 0;
+    this.ranks = {};
+    this.range = 155;
+    this.botHealth = 45;
+    this.shieldCd = 0;
+    this.pulseCd = 7;
+    this.orbitCd = 0;
+    this.pulseVisual = 0;
+    this.arcs = [];
     this.explosive = false;
     this.shot = 0;
     this.peak = 1;
@@ -291,7 +389,7 @@ export class Game {
         this.unit(
           this.player.x + Math.cos(a) * 18,
           this.player.y + Math.sin(a) * 18,
-          45,
+          this.botHealth,
           0,
         ),
       );
@@ -300,7 +398,23 @@ export class Game {
   }
   choose(id: string) {
     if (this.mode !== 'upgrade' || !this.choices.includes(id)) return;
+    this.ranks[id] = (this.ranks[id] || 0) + 1;
     switch (id) {
+      case 'magnet':
+        this.magnet *= 1.5;
+        this.xp += this.xpDrops.reduce((n, p) => n + p.value, 0);
+        this.xpDrops = [];
+        break;
+      case 'range':
+        this.range *= 1.25;
+        break;
+      case 'armor':
+        this.botHealth += 25;
+        for (const r of this.robots) {
+          r.max += 25;
+          r.hp = r.max;
+        }
+        break;
       case 'robot':
         this.addRobots(1);
         break;
@@ -344,14 +458,30 @@ export class Game {
     this.xp -= this.nextXp;
     this.level++;
     this.nextXp = Math.floor(7 + this.level * 3.7);
+    const caps: Record<string, number> = {
+      multishot: 1,
+      pierce: 3,
+      frost: 1,
+      chain: 1,
+      emp: 1,
+      shield: 1,
+      salvage: 1,
+      range: 2,
+      orbit: 3,
+      explode: 1,
+    };
     let pool = Object.keys(upgrades).filter(
       (k) =>
-        !(k === 'explode' && this.explosive) &&
-        !(k === 'convert' && this.convert >= 0.3),
+        !(caps[k] && (this.ranks[k] || 0) >= caps[k]) &&
+        !(k === 'convert' && this.convert >= 0.3) &&
+        !(['robot', 'trio'].includes(k) && this.robots.length >= 99) &&
+        !(k === 'fire' && this.fire <= 0.12),
     );
-    this.choices = [this.level < 4 ? 'robot' : 'trio'];
+    this.choices = [];
+    if (this.robots.length < 99)
+      this.choices.push(this.level < 4 ? 'robot' : 'trio');
     pool = pool.filter((k) => !this.choices.includes(k));
-    for (let i = 0; i < 2; i++) {
+    while (this.choices.length < 3) {
       const j = Math.floor(this.random() * pool.length);
       this.choices.push(pool.splice(j, 1)[0]);
     }
@@ -363,78 +493,105 @@ export class Game {
   }
   makeMap() {
     this.props = [];
-    for (const x of [-310, 190])
-      for (const y of [-310, 190]) {
-        this.props.push({
-          x,
-          y,
-          w: 122,
-          d: 95,
-          h: 46,
-          type: 'house',
-          color: x === y ? '#dcba85' : '#c8d7c0',
-        });
-        for (let i = 0; i < 7; i++) {
-          this.props.push({
-            x: x - 30 + i * 25,
-            y: y + 132,
-            w: 20,
-            d: 3,
-            h: 12,
-            type: 'fence',
-            color: '#e0ddad',
-          });
-        }
-        this.props.push({
-          x: x + 146,
-          y: y - 20,
-          w: 19,
-          d: 19,
-          h: 45,
-          type: 'tree',
-          color: '#41795b',
-        });
-        this.props.push({
-          x: x - 40,
-          y: y + 40,
-          w: 19,
-          d: 19,
-          h: 40,
-          type: 'tree',
-          color: '#477f58',
-        });
-        this.props.push({
-          x: x + 12,
-          y: y + 112,
-          w: 9,
-          d: 9,
-          h: 13,
-          type: 'bin',
-          color: '#548679',
-        });
+    const add = (
+      type: string,
+      x: number,
+      y: number,
+      w = 10,
+      d = 10,
+      h = 10,
+      color = '#729569',
+      variant = 0,
+    ) => this.props.push({ type, x, y, w, d, h, color, variant });
+    const homes = [
+      [-310, -310, 122, 95, 46, '#e4c499'],
+      [190, -310, 110, 90, 52, '#c4d5ce'],
+      [-310, 190, 120, 90, 43, '#dcb6a2'],
+      [190, 190, 104, 100, 48, '#e6d69f'],
+    ] as const;
+    homes.forEach(([x, y, w, d, h, color], i) => {
+      add('house', x, y, w, d, h, color, i);
+      for (let j = 0; j < 8; j++) {
+        if (j === 4) continue;
+        add('fence', x - 25 + j * 22, y + 134, 19, 3, 12, '#e8dfb6');
       }
+      add('mailbox', x + w + 26, y + 38, 9, 9, 22, '#839f9a', i);
+      add('bin', x + w + 12, y + 76, 9, 9, 13, '#4d826d');
+      add('bin', x + w + 25, y + 79, 9, 9, 13, '#6e92b6');
+      add('tree', x - 28, y + 10, 20, 20, 40, '#4e855b', i);
+      add('tree', x + w + 45, y - 8, 20, 20, 44, '#5e8f58', i + 1);
+      add('planter', x + 8, y + d + 5, 24, 9, 5, '#b47d63', i);
+      add('planter', x + 75, y + d + 5, 24, 9, 5, '#b47d63', i + 1);
+      add('porch', x + w, y + 24, 24, 32, 4, '#d5c4a1');
+      add('hedge', x - 13, y + 85, 10, 35, 13, '#557e51');
+      add('hose', x + w + 6, y + 108, 18, 18, 2, '#548a6d');
+    });
+    // Four recognizable gardens around the same open road network.
+    add('pool', -163, -300, 66, 100, 2, '#68b9bd');
+    add('chair', -155, -182, 13, 25, 9, '#eee0b5');
+    add('chair', -130, -182, 13, 25, 9, '#eee0b5');
+    add('umbrella', -104, -180, 26, 26, 36, '#e5b976');
+    add('court', 110, -204, 137, 109, 0, '#b17f6d');
+    add('hoop', 174, -200, 4, 4, 40, '#e5e0c5');
+    add('bench', 260, -150, 30, 11, 15, '#ba9c6c');
+    add('garden', -175, 208, 70, 95, 0, '#785c46');
+    add('shed', -164, 332, 43, 35, 26, '#8e9b79');
+    add('wheelbarrow', -106, 307, 20, 15, 12, '#b48c63');
+    add('flowers', 110, 207, 50, 92, 0, '#c98e9e');
+    add('birdbath', 133, 331, 15, 15, 21, '#b9c6b7');
+    add('bench', 99, 160, 34, 11, 15, '#b5a47b');
+    add('sign', 76, 76, 26, 3, 32, '#638f83', 0);
+    add('sign', -83, -86, 22, 3, 25, '#bb6a5c', 1);
     for (const [x, y, c] of [
       [-42, -230, '#d39371'],
-      [35, 210, '#9fc2c4'],
-      [225, -45, '#e8c876'],
-      [-205, 36, '#d5debe'],
+      [30, 215, '#9fc2c4'],
+      [238, -43, '#e8c876'],
+      [-212, 30, '#d5debe'],
+      [-40, 360, '#a4adb9'],
     ] as [number, number, string][])
-      this.props.push({ x, y, w: 21, d: 39, h: 15, type: 'car', color: c });
-    for (let i = 0; i < 22; i++) {
-      const a = (i / 22) * Math.PI * 2;
-      this.props.push({
-        x: Math.cos(a) * 435,
-        y: Math.sin(a) * 435,
-        w: 18,
-        d: 18,
-        h: 35 + (i % 3) * 7,
-        type: 'tree',
-        color: i % 2 ? '#3a7052' : '#54865c',
-      });
+      add('car', x, y, 21, 39, 15, c);
+    for (const [x, y] of [
+      [70, -130],
+      [-80, 130],
+      [72, 340],
+      [-80, -365],
+      [-350, 72],
+      [340, -80],
+    ]) {
+      add('lamp', x, y, 4, 4, 50, '#4a6467');
+      add('flowers', x + 9, y + 3, 17, 13, 0, '#e5c181');
     }
+    for (const [x, y] of [
+      [-72, 80],
+      [85, -73],
+      [-72, -150],
+      [330, 70],
+    ])
+      add('hydrant', x, y, 7, 7, 12, '#c98563');
+    for (let i = 0; i < 26; i++) {
+      const a = (i / 26) * Math.PI * 2;
+      add(
+        'tree',
+        Math.cos(a) * 433,
+        Math.sin(a) * 433,
+        18,
+        18,
+        38 + (i % 3) * 6,
+        i % 3 === 0 ? '#bba166' : i % 2 ? '#498162' : '#678d57',
+        i % 4,
+      );
+    }
+    for (let i = 0; i < 14; i++) {
+      const x = -425 + ((i * 79) % 820),
+        y = i % 2 ? -397 : 394;
+      add('rock', x, y, 9, 7, 5, '#9ba68a');
+    }
+    this.colliders = this.props.filter(
+      (p) => p.type === 'house' || p.type === 'car',
+    );
   }
   blocked(x: number, y: number) {
-    return this.props.some(
+    return this.colliders.some(
       (p) =>
         (p.type === 'house' || p.type === 'car') &&
         x > p.x - 7 &&
@@ -508,7 +665,13 @@ export class Game {
     if (e.hp === -999) return;
     e.hp = -999;
     this.kills++;
-    this.xpDrops.push({ x: e.x, y: e.y, value: e.type === 2 ? 5 : 1 });
+    this.xpDrops.push({
+      x: e.x,
+      y: e.y,
+      value:
+        (e.type === 2 ? 5 : 1) *
+        (this.ranks.salvage && this.random() < 0.35 ? 2 : 1),
+    });
     this.burst(e.x, e.y, '#edc785');
     if (this.random() < this.convert) {
       this.addRobots(1);
@@ -556,6 +719,32 @@ export class Game {
       this.player.max,
       this.player.hp + (this.repairs * dt) / 3,
     );
+    this.shieldCd = Math.max(0, this.shieldCd - dt);
+    this.pulseVisual = Math.max(0, this.pulseVisual - dt);
+    this.arcs = this.arcs.filter((a) => (a.life -= dt) > 0);
+    if (this.ranks.emp && (this.pulseCd -= dt) <= 0) {
+      this.pulseCd = 7;
+      this.pulseVisual = 0.65;
+      this.sound(120, 0.2, 'sine');
+      for (const e of this.enemies)
+        if (e.hp > 0 && dist(e, this.player) < 110) {
+          e.hp -= this.damage * 2;
+          e.slow = 3;
+          e.hit = 0.2;
+          if (e.hp <= 0) this.kill(e);
+        }
+    }
+    if (this.ranks.orbit && (this.orbitCd -= dt) <= 0) {
+      this.orbitCd = 0.3;
+      for (const p of this.orbitPositions())
+        for (const e of this.enemies)
+          if (e.hp > 0 && dist(e, p) < 17) {
+            e.hp -= this.damage * 0.7;
+            e.hit = 0.12;
+            this.burst(e.x, e.y, '#d7b2ff', 3);
+            if (e.hp <= 0) this.kill(e);
+          }
+    }
     this.spawn -= dt;
     while (this.spawn <= 0) {
       const rate = Math.max(0.085, 1.45 / (1 + this.time / 45));
@@ -597,7 +786,7 @@ export class Game {
       }
       if (r.cd <= 0) {
         let target: Unit | undefined,
-          best = 155;
+          best = this.range;
         for (const e of this.enemies) {
           const d = dist(r, e);
           if (e.hp > 0 && d < best) {
@@ -606,16 +795,21 @@ export class Game {
           }
         }
         if (target) {
-          const d = Math.max(1, dist(r, target));
-          this.bullets.push({
-            x: r.x,
-            y: r.y,
-            vx: ((target.x - r.x) / d) * 290,
-            vy: ((target.y - r.y) / d) * 290,
-            life: 0.65,
-            damage: this.damage,
-            enemy: false,
-          });
+          const angle = Math.atan2(target.y - r.y, target.x - r.x);
+          const angles = i === 0 && this.ranks.multishot ? [-0.2, 0, 0.2] : [0];
+          for (const offset of angles)
+            this.bullets.push({
+              x: r.x,
+              y: r.y,
+              vx: Math.cos(angle + offset) * 290,
+              vy: Math.sin(angle + offset) * 290,
+              life: (this.range + 35) / 290,
+              damage: this.damage * (offset ? 0.65 : 1),
+              enemy: false,
+              hits: [],
+              pierce: this.ranks.pierce || 0,
+              frost: !!this.ranks.frost,
+            });
           r.cd = this.fire * (i === 0 ? 1 : 1.1);
           this.sound(320, 0.045);
         } else r.cd = 0.1;
@@ -625,17 +819,22 @@ export class Game {
       if (e.hp <= 0) continue;
       e.hit = Math.max(0, e.hit - dt);
       e.cd -= dt;
+      e.slow = Math.max(0, (e.slow || 0) - dt);
       const d = Math.max(1, dist(e, this.player));
       const speed =
         (e.type === 1 ? 55 : e.type === 2 ? 23 : 27) *
-        (1 + Math.min(0.7, this.time / 600));
+        (1 + Math.min(0.7, this.time / 600)) *
+        (e.slow ? 0.55 : 1);
       this.move(
         e,
         ((this.player.x - e.x) / d) * speed * dt,
         ((this.player.y - e.y) / d) * speed * dt,
       );
       if (d < 15 && this.invuln <= 0) {
-        this.player.hp -= e.type === 2 ? 16 : 7;
+        if (this.ranks.shield && this.shieldCd <= 0) {
+          this.shieldCd = 12;
+          this.burst(this.player.x, this.player.y, '#94dfff', 18);
+        } else this.player.hp -= e.type === 2 ? 16 : 7;
         this.player.hit = 0.2;
         this.invuln = 0.65;
         this.burst(this.player.x, this.player.y, '#fc9b87');
@@ -656,13 +855,34 @@ export class Game {
         if (this.explosive) this.blast(r.x, r.y, this.damage * 4);
       }
     this.robots = this.robots.filter((r) => r.hp > 0);
+    // Spatial buckets keep piercing volleys affordable with large swarms.
+    const grid = new Map<string, Unit[]>();
+    for (const e of this.enemies) {
+      if (e.hp <= 0) continue;
+      const key = `${Math.floor(e.x / 40)},${Math.floor(e.y / 40)}`;
+      const cell = grid.get(key);
+      if (cell) cell.push(e);
+      else grid.set(key, [e]);
+    }
     for (const b of this.bullets) {
       const old = { x: b.x, y: b.y };
       b.x += b.vx * dt;
       b.y += b.vy * dt;
       b.life -= dt;
-      for (const e of this.enemies) {
-        if (e.hp <= 0) continue;
+      const nearby: Unit[] = [];
+      for (
+        let gx = Math.floor((Math.min(old.x, b.x) - 12) / 40);
+        gx <= Math.floor((Math.max(old.x, b.x) + 12) / 40);
+        gx++
+      )
+        for (
+          let gy = Math.floor((Math.min(old.y, b.y) - 12) / 40);
+          gy <= Math.floor((Math.max(old.y, b.y) + 12) / 40);
+          gy++
+        )
+          nearby.push(...(grid.get(`${gx},${gy}`) || []));
+      for (const e of nearby) {
+        if (e.hp <= 0 || b.hits.includes(e.id)) continue;
         const dx = b.x - old.x,
           dy = b.y - old.y,
           t = clamp(
@@ -677,13 +897,39 @@ export class Game {
         ) {
           e.hp -= b.damage;
           e.hit = 0.12;
-          b.life = 0;
+          b.hits.push(e.id);
+          if (b.frost) e.slow = 2;
+          if (b.pierce <= 0) b.life = 0;
+          else b.pierce--;
+
           this.burst(e.x, e.y, '#c8ffb2', 3);
           if (e.hp <= 0) this.kill(e);
           this.shot++;
+          if (this.ranks.chain && this.shot % 4 === 0) {
+            let from: V = e;
+            const visited = new Set([e.id]);
+            for (let jump = 0; jump < 3; jump++) {
+              const next = this.enemies
+                .filter(
+                  (n) => n.hp > 0 && !visited.has(n.id) && dist(n, from) < 60,
+                )
+                .sort((a, b) => dist(a, from) - dist(b, from))[0];
+              if (!next) break;
+              visited.add(next.id);
+              this.arcs.push({
+                a: { x: from.x, y: from.y },
+                b: { x: next.x, y: next.y },
+                life: 0.16,
+              });
+              next.hp -= this.damage * 0.6;
+              next.hit = 0.15;
+              if (next.hp <= 0) this.kill(next);
+              from = next;
+            }
+          }
           if (this.explosive && this.shot % 8 === 0)
             this.blast(e.x, e.y, this.damage * 1.5);
-          break;
+          if (b.life <= 0) break;
         }
       }
     }
@@ -717,6 +963,17 @@ export class Game {
       return;
     }
     this.checkLevel();
+  }
+  orbitPositions() {
+    const count = (this.ranks.orbit || 0) * 2;
+    return Array.from({ length: count }, (_, i) => ({
+      x:
+        this.player.x +
+        Math.cos(this.time * 2.2 + (i / count) * Math.PI * 2) * 43,
+      y:
+        this.player.y +
+        Math.sin(this.time * 2.2 + (i / count) * Math.PI * 2) * 43,
+    }));
   }
   project(x: number, y: number, z = 0) {
     return {
@@ -803,39 +1060,123 @@ export class Game {
     this.ground(p.x + 9, p.y + 9, p.w + 8, p.d + 8, '#355e4a40');
     if (p.type === 'house') {
       this.box(p.x, p.y, p.w, p.d, p.h, p.color, p.color, '#a19e80');
-      this.box(
-        p.x - 7,
-        p.y - 7,
-        p.w + 14,
-        p.d + 14,
-        7,
-        '#506e72',
-        '#39565e',
-        '#344c56',
-        p.h,
+      const v = p.variant || 0;
+      const roofs = [
+        ['#a2705e', '#875b50'],
+        ['#647e8a', '#486373'],
+        ['#879268', '#697953'],
+        ['#ad8460', '#8b624d'],
+      ];
+      const roof = roofs[v % 4];
+      const a = this.project(p.x - 7, p.y - 7, p.h),
+        b = this.project(p.x + p.w + 7, p.y - 7, p.h),
+        d = this.project(p.x - 7, p.y + p.d + 7, p.h),
+        e = this.project(p.x + p.w + 7, p.y + p.d + 7, p.h),
+        r1 = this.project(p.x - 7, p.y + p.d / 2, p.h + 25),
+        r2 = this.project(p.x + p.w + 7, p.y + p.d / 2, p.h + 25);
+      this.poly(
+        [
+          [a.x, a.y],
+          [b.x, b.y],
+          [r2.x, r2.y],
+          [r1.x, r1.y],
+        ],
+        roof[1],
       );
-      this.box(
-        p.x + 6,
-        p.y + 6,
-        p.w - 12,
-        p.d - 12,
-        7,
-        '#648185',
-        '#486c72',
-        '#38565f',
-        p.h + 7,
+      this.poly(
+        [
+          [r1.x, r1.y],
+          [r2.x, r2.y],
+          [e.x, e.y],
+          [d.x, d.y],
+        ],
+        roof[0],
       );
-      this.box(
-        p.x + 15,
-        p.y + 12,
-        13,
-        15,
-        19,
-        '#c2b097',
-        '#aa9680',
-        '#8c7a6e',
-        p.h + 13,
+      this.poly(
+        [
+          [b.x, b.y],
+          [e.x, e.y],
+          [r2.x, r2.y],
+        ],
+        p.color,
       );
+      // Individual shingle rows and staggered joints on the roof slope.
+      for (let row = 1; row < 7; row++) {
+        const yy = p.y + p.d / 2 + ((p.d / 2 + 7) * row) / 7,
+          zz = p.h + 25 * (1 - row / 7);
+        this.worldLine(
+          [
+            { x: p.x - 6, y: yy, z: zz },
+            { x: p.x + p.w + 6, y: yy, z: zz },
+          ],
+          roof[1],
+        );
+        for (let col = 0; col < 8; col++) {
+          const xx = p.x + col * 17 + (row % 2) * 8;
+          this.worldLine(
+            [
+              { x: xx, y: yy, z: zz },
+              { x: xx, y: yy + 5, z: zz - 2 },
+            ],
+            roof[1],
+          );
+        }
+      }
+      this.box(
+        p.x + 16,
+        p.y + 15,
+        12,
+        14,
+        27,
+        '#c9b395',
+        '#ab8d76',
+        '#8b705f',
+        p.h + 8,
+      );
+      for (let j = 0; j < 3; j++)
+        this.ground(p.x + 17, p.y + 16, 10, 2, '#8b705f', p.h + 13 + j * 7);
+      // Clapboard siding, foundations, window shutters and a numbered front door.
+      for (let j = 6; j < p.h - 4; j += 6)
+        this.box(
+          p.x,
+          p.y + p.d,
+          p.w,
+          0.8,
+          1,
+          p.color,
+          '#aa9f873b',
+          '#aa9f873b',
+          j,
+        );
+      this.box(p.x, p.y + p.d, p.w, 2, 4, '#c4b79c', '#a69e87', '#8b937e');
+      for (let k = 0; k < 3; k++) {
+        this.box(
+          p.x + 10 + k * 32,
+          p.y + p.d + 2,
+          4,
+          1,
+          18,
+          '#6a8e81',
+          '#6a8e81',
+          '#567467',
+          14,
+        );
+        this.box(
+          p.x + 28 + k * 32,
+          p.y + p.d + 2,
+          4,
+          1,
+          18,
+          '#6a8e81',
+          '#6a8e81',
+          '#567467',
+          14,
+        );
+      }
+      if (v === 1) {
+        for (let k = 0; k < 3; k++)
+          this.ground(p.x + 50 + k * 16, p.y + 55, 13, 23, '#3c6279', p.h + 13);
+      }
       for (let k = 0; k < 3; k++) {
         this.box(
           p.x + 14 + k * 32,
@@ -861,6 +1202,38 @@ export class Game {
         0,
       );
       this.ground(p.x + p.w, p.y + 24, 45, 28, '#b9bd9d');
+      for (let k = 0; k < 3; k++) {
+        this.box(
+          p.x + 20 + k * 32,
+          p.y + p.d + 3,
+          2,
+          1,
+          14,
+          '#e1dfbe',
+          '#e1dfbe',
+          '#e1dfbe',
+          16,
+        );
+        this.box(
+          p.x + 14 + k * 32,
+          p.y + p.d + 3,
+          14,
+          1,
+          1,
+          '#e1dfbe',
+          '#e1dfbe',
+          '#e1dfbe',
+          23,
+        );
+      }
+      this.labelWorld(
+        String(12 + (p.variant || 0) * 6),
+        p.x + p.w + 2,
+        p.y + 35,
+        30,
+        '#f3e7c5',
+        6,
+      );
     } else if (p.type === 'tree') {
       this.box(p.x + 7, p.y + 7, 5, 5, 20, '#887b51', '#756b49', '#5e5b41');
       this.box(p.x - 3, p.y - 3, 24, 24, 18, p.color, '#356847', '#2e6149', 18);
@@ -876,6 +1249,34 @@ export class Game {
         33,
       );
       this.box(p.x + 5, p.y + 5, 9, 9, 6, '#87a96b', '#668f55', '#588050', 45);
+      for (let j = 0; j < 7; j++) {
+        const xx = p.x - 3 + ((j * 7) % 25),
+          yy = p.y - 3 + ((j * 11) % 24);
+        this.box(
+          xx,
+          yy,
+          5,
+          5,
+          4,
+          j % 2 ? '#739857' : p.color,
+          '#52804d',
+          '#427348',
+          26 + (j % 3) * 6,
+        );
+      }
+      if ((p.variant || 0) % 4 === 2)
+        for (let j = 0; j < 5; j++)
+          this.box(
+            p.x + ((j * 7) % 19),
+            p.y + ((j * 11) % 20),
+            3,
+            3,
+            3,
+            '#e4a07e',
+            '#c88161',
+            '#a96954',
+            29,
+          );
     } else if (p.type === 'fence') {
       this.box(p.x, p.y, p.w, 2, 3, '#e4dfb0', '#b6bd96', '#98a783', 6);
       for (const dx of [0, 12])
@@ -907,6 +1308,8 @@ export class Game {
       for (const dy of [6, 30])
         this.box(p.x - 2, p.y + dy, 4, 7, 5, '#32464a', '#253b40', '#21373c');
       this.box(p.x + 2, p.y - 1, 5, 2, 3, '#ffeeac', '#ffeb9c', '#d7cb87', 7);
+    } else if (p.type !== 'bin') {
+      this.drawDetail(p);
     } else {
       this.box(p.x, p.y, 9, 9, 13, '#7da48d', '#4b7d73', '#3d695e');
       this.box(
@@ -921,6 +1324,337 @@ export class Game {
         13,
       );
     }
+  }
+  worldLine(
+    points: { x: number; y: number; z?: number }[],
+    color: string,
+    width = 1,
+  ) {
+    const c = this.ctx;
+    c.strokeStyle = color;
+    c.lineWidth = width;
+    c.beginPath();
+    points.forEach((p, i) => {
+      const v = this.project(p.x, p.y, p.z || 0);
+      if (i) c.lineTo(v.x, v.y);
+      else c.moveTo(v.x, v.y);
+    });
+    c.stroke();
+  }
+  labelWorld(
+    text: string,
+    x: number,
+    y: number,
+    z = 0,
+    color = '#e3dfc2',
+    size = 7,
+  ) {
+    const p = this.project(x, y, z);
+    this.ctx.fillStyle = color;
+    this.ctx.font = `bold ${size}px monospace`;
+    this.ctx.textAlign = 'center';
+    this.ctx.fillText(text, p.x, p.y);
+  }
+  drawDetail(p: Prop) {
+    const { x, y, w, d, color } = p;
+    const box = (
+      dx: number,
+      dy: number,
+      bw: number,
+      bd: number,
+      h: number,
+      t: string = color,
+      z = 0,
+    ) => this.box(x + dx, y + dy, bw, bd, h, t, t, '#536557', z);
+    switch (p.type) {
+      case 'pool':
+        this.ground(x - 7, y - 7, w + 14, d + 14, '#ddd2ab');
+        this.ground(x, y, w, d, '#488c9c');
+        this.ground(x + 3, y + 3, w - 6, d - 6, '#73c1c4');
+        for (let i = 0; i < 8; i++)
+          this.ground(
+            x + 8 + (i % 2) * 7,
+            y + 8 + i * 10,
+            w - 26,
+            1,
+            '#b1ded2',
+          );
+        this.worldLine(
+          [
+            { x: x + w - 9, y: y + d - 10, z: 3 },
+            { x: x + w - 9, y: y + d + 6, z: 3 },
+            { x: x + w - 9, y: y + d + 6, z: 9 },
+          ],
+          '#e5e7ce',
+        );
+        this.worldLine(
+          [
+            { x: x + w - 17, y: y + d - 10, z: 3 },
+            { x: x + w - 17, y: y + d + 6, z: 3 },
+            { x: x + w - 17, y: y + d + 6, z: 9 },
+          ],
+          '#e5e7ce',
+        );
+        break;
+      case 'court':
+        this.ground(x - 4, y - 4, w + 8, d + 8, '#d3c39f');
+        this.ground(x, y, w, d, '#b47f6a');
+        this.ground(x + 6, y + 6, w - 12, d - 12, '#6d9c91');
+        this.worldLine(
+          [
+            { x: x + 8, y: y + 8 },
+            { x: x + w - 8, y: y + 8 },
+            { x: x + w - 8, y: y + d - 8 },
+            { x: x + 8, y: y + d - 8 },
+            { x: x + 8, y: y + 8 },
+          ],
+          '#e2d7b9',
+        );
+        this.worldLine(
+          [
+            { x: x + 8, y: y + d / 2 },
+            { x: x + w - 8, y: y + d / 2 },
+          ],
+          '#e2d7b9',
+        );
+        this.worldLine(
+          [
+            { x: x + w / 2 - 22, y: y + 8 },
+            { x: x + w / 2 - 22, y: y + 33 },
+            { x: x + w / 2 + 22, y: y + 33 },
+            { x: x + w / 2 + 22, y: y + 8 },
+          ],
+          '#e2d7b9',
+        );
+        {
+          const q = this.project(x + w / 2, y + d / 2);
+          this.ctx.strokeStyle = '#e2d7b9';
+          this.ctx.beginPath();
+          this.ctx.ellipse(
+            q.x,
+            q.y,
+            13 * this.zoom,
+            7 * this.zoom,
+            0,
+            0,
+            Math.PI * 2,
+          );
+          this.ctx.stroke();
+        }
+        break;
+      case 'hoop':
+        box(0, 0, 3, 3, 39, '#536970');
+        box(-12, 0, 27, 2, 15, '#e4dfc6', 32);
+        box(-4, 2, 10, 2, 7, '#a57968', 35);
+        this.worldLine(
+          [
+            { x: x - 2, y: y + 3, z: 33 },
+            { x: x + 9, y: y + 10, z: 33 },
+            { x: x + 14, y: y + 4, z: 33 },
+          ],
+          '#dd9c71',
+        );
+        break;
+      case 'garden':
+        this.ground(x - 4, y - 4, w + 8, d + 8, '#c5b792');
+        this.ground(x, y, w, d, '#775f48');
+        for (let row = 0; row < 5; row++) {
+          this.ground(x + 4, y + 5 + row * 18, w - 8, 11, '#655342');
+          for (let j = 0; j < 7; j++) {
+            box(
+              6 + j * 9,
+              7 + row * 18,
+              5,
+              5,
+              4,
+              row % 2 ? '#a8b269' : '#70965e',
+            );
+            if (row % 2 === 0)
+              box(7 + j * 9, 7 + row * 18, 2, 2, 2, '#d78a63', 4);
+          }
+        }
+        break;
+      case 'flowers':
+      case 'planter':
+        if (p.type === 'planter') box(0, 0, w, d, 5, color);
+        for (let j = 0; j < Math.floor((w * d) / 24); j++) {
+          const xx = 2 + ((j * 13) % (w - 3)),
+            yy = 2 + ((j * 17) % (d - 3));
+          box(xx, yy, 2, 2, 5, '#60855c', p.type === 'planter' ? 5 : 0);
+          box(
+            xx - 1,
+            yy - 1,
+            4,
+            4,
+            2,
+            ['#efd88d', '#d99bb0', '#e5b9d0', '#f1ddd0'][j % 4],
+            p.type === 'planter' ? 10 : 5,
+          );
+        }
+        break;
+      case 'mailbox':
+        box(3, 3, 3, 3, 18, '#aa9673');
+        box(-2, 0, 13, 9, 7, color, 18);
+        box(9, 2, 1, 2, 7, '#df9776', 22);
+        break;
+      case 'lamp':
+        box(0, 0, 4, 4, 43, '#4a6467');
+        box(-2, -2, 8, 8, 8, '#e9d8a7', 40);
+        box(-4, -4, 12, 12, 3, '#405a5a', 48);
+        break;
+      case 'hydrant':
+        box(1, 1, 5, 5, 11, color);
+        box(-3, 1, 13, 4, 4, color, 6);
+        box(0, 0, 7, 7, 2, '#dfad7a', 12);
+        break;
+      case 'bench':
+        box(2, 2, 3, 7, 9, '#536557');
+        box(w - 5, 2, 3, 7, 9, '#536557');
+        for (let j = 0; j < 3; j++) box(0, j * 4, w, 3, 2, color, 10);
+        box(0, 0, w, 2, 9, color, 12);
+        break;
+      case 'chair':
+        box(0, 0, w, d, 3, color, 4);
+        box(0, 0, w, 4, 10, color, 7);
+        for (let i = 3; i < d; i += 5) box(1, i, w - 2, 1, 1, '#9aa584', 7);
+        break;
+      case 'umbrella':
+        box(w / 2, d / 2, 2, 2, 29, '#a99675');
+        for (let j = 0; j < 4; j++)
+          box((j * w) / 4, 0, w / 4, d, 2, j % 2 ? '#ede0b4' : color, 30);
+        box(w / 4, d / 4, w / 2, d / 2, 3, '#eee2b9', 32);
+        break;
+      case 'birdbath':
+        box(5, 5, 5, 5, 15, '#adb6a3');
+        box(0, 0, 15, 15, 4, '#c6ceb4', 15);
+        box(3, 3, 9, 9, 1, '#87bab9', 19);
+        break;
+      case 'hedge':
+        box(0, 0, w, d, 13, color);
+        for (let j = 0; j < d; j += 9) box(0, j, w, 6, 3, '#78955b', 13);
+        break;
+      case 'porch':
+        box(0, 0, w, d, 4, color);
+        box(w - 4, 0, 8, d, 2, '#bcb496');
+        break;
+      case 'shed':
+        box(0, 0, w, d, 26, color);
+        box(-3, -3, w + 6, d + 6, 4, '#768270', 26);
+        box(15, d, 15, 1, 20, '#b5af89');
+        break;
+      case 'wheelbarrow':
+        box(3, 1, 16, 12, 5, color, 6);
+        box(0, 4, 4, 5, 5, '#3e5152');
+        box(17, 1, 10, 2, 2, '#72806a', 7);
+        box(17, 11, 10, 2, 2, '#72806a', 7);
+        break;
+      case 'hose': {
+        const q = this.project(x + 9, y + 9);
+        this.ctx.strokeStyle = '#487e69';
+        this.ctx.lineWidth = 2;
+        this.ctx.beginPath();
+        this.ctx.ellipse(
+          q.x,
+          q.y,
+          9 * this.zoom,
+          5 * this.zoom,
+          0,
+          0,
+          Math.PI * 2,
+        );
+        this.ctx.stroke();
+        break;
+      }
+      case 'sign':
+        box(11, 0, 3, 3, p.h, '#59726b');
+        box(0, -1, w, 2, 10, color, p.h - 3);
+        this.labelWorld(
+          p.variant ? 'STOP' : 'MAPLE AVE',
+          x + w / 2,
+          y,
+          p.h + 2,
+          '#f2e7c9',
+          p.variant ? 5 : 6,
+        );
+        if (!p.variant) {
+          box(9, -9, 2, 23, 7, '#638f83', p.h - 12);
+        }
+        break;
+      case 'rock':
+        box(0, 0, w, d, 4, color);
+        box(2, 1, w - 3, d - 2, 2, '#b1b49a', 4);
+        break;
+    }
+  }
+  drawGroundDetails() {
+    // Concrete sidewalk joints, drains, road repairs and garden paths.
+    for (let i = -490; i < 500; i += 24) {
+      this.worldLine(
+        [
+          { x: -65, y: i },
+          { x: -51, y: i },
+        ],
+        '#a1ad93',
+      );
+      this.worldLine(
+        [
+          { x: 51, y: i },
+          { x: 65, y: i },
+        ],
+        '#a1ad93',
+      );
+      this.worldLine(
+        [
+          { x: i, y: -65 },
+          { x: i, y: -51 },
+        ],
+        '#a1ad93',
+      );
+      this.worldLine(
+        [
+          { x: i, y: 51 },
+          { x: i, y: 65 },
+        ],
+        '#a1ad93',
+      );
+    }
+    for (const [x, y] of [
+      [-45, -115],
+      [36, 120],
+      [-170, 36],
+      [180, -44],
+    ]) {
+      this.ground(x, y, 9, 14, '#576f71');
+      for (let j = 0; j < 4; j++)
+        this.ground(x + 1, y + 2 + j * 3, 7, 1, '#a4aaa0');
+    }
+    for (const [x, y] of [
+      [24, -160],
+      [-24, 160],
+      [300, 20],
+      [-280, -21],
+    ]) {
+      this.ground(x, y, 13, 12, '#697e81');
+      this.worldLine(
+        [
+          { x, y },
+          { x: x + 7, y: y + 4 },
+          { x: x + 3, y: y + 10 },
+          { x: x + 14, y: y + 17 },
+        ],
+        '#576e72',
+      );
+    }
+    for (const h of this.props.filter((p) => p.type === 'house')) {
+      const pathX = h.x + h.w + 27;
+      this.ground(h.x + h.w, h.y + 24, 41, 29, '#c1bea0');
+      for (let j = 0; j < 5; j++)
+        this.ground(pathX, h.y + 57 + j * 14, 12, 10, '#c4c4a2');
+      // Mown lawn stripes remain subtle beneath enemies and XP.
+      for (let j = 0; j < 5; j++)
+        this.ground(h.x + 7 + j * 24, h.y + h.d + 22, 11, 40, '#88a16c');
+    }
+    this.labelWorld('SLOW', -8, -110, 0, '#d9d3b5', 8);
   }
   sprite(u: Unit, robot: boolean, leader = false) {
     const p = this.project(u.x, u.y),
@@ -997,6 +1731,7 @@ export class Game {
       rect(-4, -19, 8, 8, '#e6c29a');
       rect(-4, -20, 8, 3, u.type === 2 ? '#384455' : '#6d6250');
       rect(2, -16, 1, 1, '#37424a');
+      if (u.slow) rect(-6, -22, 12, 2, '#91deff');
       rect(-7 - big, -11, 2, 7, '#d9b391');
       rect(5 + big, -11, 2, 7, '#d9b391');
     }
@@ -1046,6 +1781,10 @@ export class Game {
       this.ground(-43 + i * 18, -77, 10, 20, '#e3dec0');
       this.ground(60, -43 + i * 18, 20, 10, '#e3dec0');
     }
+    this.drawGroundDetails();
+    for (const p of this.props)
+      if (['pool', 'court', 'garden', 'flowers'].includes(p.type))
+        this.drawDetail(p);
     for (const p of this.xpDrops) {
       const v = this.project(p.x, p.y, 3 + Math.sin(this.time * 4 + p.x) * 1.5);
       c.fillStyle = '#437e7844';
@@ -1063,19 +1802,21 @@ export class Game {
       c.fillRect(v.x - 1, v.y - 1, 2, 2);
     }
     const items = [
-      ...this.props.map((p) => ({
-        depth: p.x + p.y + p.w / 2 + p.d / 2,
-        draw: () => {
-          const a = this.project(p.x + p.w / 2, p.y + p.d / 2);
-          c.globalAlpha =
-            dist(p, this.player) < 150 &&
-            a.y > this.project(this.player.x, this.player.y).y
-              ? 0.63
-              : 1;
-          this.drawProp(p);
-          c.globalAlpha = 1;
-        },
-      })),
+      ...this.props
+        .filter((p) => !['pool', 'court', 'garden', 'flowers'].includes(p.type))
+        .map((p) => ({
+          depth: p.x + p.y + p.w / 2 + p.d / 2,
+          draw: () => {
+            const a = this.project(p.x + p.w / 2, p.y + p.d / 2);
+            c.globalAlpha =
+              dist(p, this.player) < 150 &&
+              a.y > this.project(this.player.x, this.player.y).y
+                ? 0.63
+                : 1;
+            this.drawProp(p);
+            c.globalAlpha = 1;
+          },
+        })),
       ...this.enemies.map((u) => ({
         depth: u.x + u.y,
         draw: () => this.sprite(u, false),
@@ -1094,7 +1835,7 @@ export class Game {
     for (const b of this.bullets) {
       const p = this.project(b.x, b.y, 8),
         q = this.project(b.x - b.vx * 0.025, b.y - b.vy * 0.025, 8);
-      c.strokeStyle = '#edffc1';
+      c.strokeStyle = b.frost ? '#9ae6ff' : b.pierce ? '#efb0fa' : '#edffc1';
       c.lineWidth = 2;
       c.beginPath();
       c.moveTo(q.x, q.y);
@@ -1102,6 +1843,53 @@ export class Game {
       c.stroke();
       c.fillStyle = '#fff9dc';
       c.fillRect(p.x - 1, p.y - 1, 2, 2);
+    }
+    for (const a of this.arcs) {
+      const p = this.project(a.a.x, a.a.y, 10),
+        q = this.project(a.b.x, a.b.y, 10);
+      c.strokeStyle = '#b5c4ff';
+      c.lineWidth = 2;
+      c.beginPath();
+      c.moveTo(p.x, p.y);
+      c.lineTo((p.x + q.x) / 2 + 4, (p.y + q.y) / 2 - 4);
+      c.lineTo(q.x, q.y);
+      c.stroke();
+    }
+    if (this.ranks.shield && this.shieldCd <= 0) {
+      const p = this.project(this.player.x, this.player.y, 8);
+      c.strokeStyle = '#99dfff';
+      c.lineWidth = 1;
+      c.beginPath();
+      c.ellipse(p.x, p.y, 14 * this.zoom, 18 * this.zoom, 0, 0, Math.PI * 2);
+      c.stroke();
+    }
+    if (this.pulseVisual > 0) {
+      const p = this.project(this.player.x, this.player.y),
+        r = (1 - this.pulseVisual / 0.65) * 110;
+      c.globalAlpha = this.pulseVisual / 0.65;
+      c.strokeStyle = '#9eeeff';
+      c.lineWidth = 3;
+      c.beginPath();
+      c.ellipse(
+        p.x,
+        p.y,
+        r * this.zoom,
+        r * 0.53 * this.zoom,
+        0,
+        0,
+        Math.PI * 2,
+      );
+      c.stroke();
+      c.globalAlpha = 1;
+    }
+    for (const o of this.orbitPositions()) {
+      const p = this.project(o.x, o.y, 9);
+      c.fillStyle = '#334052';
+      c.fillRect(p.x - 5, p.y - 3, 10, 6);
+      c.fillStyle = '#d7b2ff';
+      c.fillRect(p.x - 3, p.y - 4, 6, 6);
+      c.fillStyle = '#eff9ff';
+      c.fillRect(p.x - 1, p.y - 3, 2, 2);
     }
     for (const v of this.particles) {
       const p = this.project(v.x, v.y, 8);
