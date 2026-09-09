@@ -14,6 +14,15 @@ export type Snapshot = {
   sector: string;
 };
 type V = { x: number; y: number };
+export const robotClasses = {
+  scout: { name: 'Scout', color: '#f7d875', speed: 1.35, damage: 0.7, rate: 0.7, range: 0.9, health: 0, space: 65, icon: '»', description: 'Fast skirmisher. Darts around humans with rapid light bolts.' },
+  gunner: { name: 'Gunner', color: '#96ddbd', speed: 1, damage: 1, rate: 1.1, range: 1, health: 0, space: 75, icon: 'Ⅱ', description: 'Twin-barrel fighter. Fires two bolts per volley.' },
+  sniper: { name: 'Sniper', color: '#cea5fa', speed: 0.9, damage: 3, rate: 2.3, range: 1.65, health: 0, space: 125, icon: '↠', description: 'Keeps its distance. Heavy long-range shots pierce two humans.' },
+  bomber: { name: 'Bomber', color: '#ffad78', speed: 0.9, damage: 1.3, rate: 2, range: 1, health: 20, space: 85, icon: '✳', description: 'Armoured artillery. Every shell explodes in a small area.' },
+  medic: { name: 'Medic', color: '#ff9fbb', speed: 1.1, damage: 0.45, rate: 1.4, range: 0.9, health: 0, space: 100, icon: '✚', description: 'Heals a wounded ally within 115 units for 4 HP every 3 seconds.' },
+  frost: { name: 'Frost', color: '#8edfff', speed: 1, damage: 0.65, rate: 1.2, range: 1.1, health: 0, space: 90, icon: '❄', description: 'Crowd control. Chilling bolts slow humans for 2 seconds.' },
+} as const;
+export type RobotClass = keyof typeof robotClasses;
 type Unit = V & {
   hp: number;
   max: number;
@@ -22,6 +31,8 @@ type Unit = V & {
   type: number;
   id: number;
   slow?: number;
+  robotClass?: RobotClass;
+  supportCd?: number;
 };
 type Bullet = V & {
   vx: number;
@@ -32,6 +43,8 @@ type Bullet = V & {
   hits: number[];
   pierce: number;
   frost: boolean;
+  splash?: boolean;
+  color?: string;
 };
 type Particle = V & {
   vx: number;
@@ -95,7 +108,7 @@ export const upgrades: Record<
     tag: 'RECOVERY',
     icon: '✚',
     description:
-      'Repair 40 core health. Add a repair bot that heals 1 HP every 3 seconds.',
+      'Repair 40 core health. Add a Medic that heals wounded nearby allies.',
   },
   explode: {
     name: 'Exploding Robots',
@@ -187,6 +200,9 @@ export const upgrades: Record<
       'Two tiny satellites circle your core, damaging humans they touch. Stack 3 times.',
   },
 };
+for (const [id, role] of Object.entries(robotClasses)) {
+  upgrades[`class_${id}`] = { name: `+1 ${role.name}`, tag: 'ROBOT CLASS', icon: role.icon, description: role.description };
+}
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
 const dist = (a: V, b: V) => Math.hypot(a.x - b.x, a.y - b.y);
 export class Game {
@@ -392,23 +408,26 @@ export class Game {
       choices: [...this.choices],
     });
   }
-  addRobots(n: number) {
+  addRobots(n: number, robotClass: RobotClass = 'gunner') {
     for (let i = 0; i < n && this.robots.length < 99; i++) {
       const a = this.random() * Math.PI * 2;
       this.robots.push(
         this.unit(
           this.player.x + Math.cos(a) * 18,
           this.player.y + Math.sin(a) * 18,
-          this.botHealth,
+          this.botHealth + robotClasses[robotClass].health,
           0,
         ),
       );
+      this.robots[this.robots.length - 1].robotClass = robotClass;
+      this.robots[this.robots.length - 1].supportCd = 3;
     }
     this.peak = Math.max(this.peak, this.robots.length + 1);
   }
   choose(id: string) {
     if (this.mode !== 'upgrade' || !this.choices.includes(id)) return;
     this.ranks[id] = (this.ranks[id] || 0) + 1;
+    if (id.startsWith('class_')) this.addRobots(1, id.slice(6) as RobotClass);
     switch (id) {
       case 'magnet':
         this.magnet *= 1.5;
@@ -446,8 +465,7 @@ export class Game {
         break;
       case 'repair':
         this.player.hp = Math.min(this.player.max, this.player.hp + 40);
-        this.repairs++;
-        this.addRobots(1);
+        this.addRobots(1, 'medic');
         break;
       case 'explode':
         this.explosive = true;
@@ -484,12 +502,16 @@ export class Game {
       (k) =>
         !(caps[k] && (this.ranks[k] || 0) >= caps[k]) &&
         !(k === 'convert' && this.convert >= 0.3) &&
-        !(['robot', 'trio'].includes(k) && this.robots.length >= 99) &&
+        !((['robot', 'trio'].includes(k) || k.startsWith('class_')) && this.robots.length >= 99) &&
         !(k === 'fire' && this.fire <= 0.12),
     );
     this.choices = [];
     if (this.robots.length < 99)
       this.choices.push(this.level < 4 ? 'robot' : 'trio');
+    if (this.robots.length < 99) {
+      const classes = Object.keys(robotClasses);
+      this.choices.push(`class_${classes[Math.floor(this.random() * classes.length)]}`);
+    }
     pool = pool.filter((k) => !this.choices.includes(k));
     while (this.choices.length < 3) {
       const j = Math.floor(this.random() * pool.length);
@@ -806,6 +828,53 @@ export class Game {
         if (e.hp <= 0) this.kill(e);
       }
   }
+  steerRobot(r: Unit, dt: number) {
+    const role = robotClasses[r.robotClass || 'gunner'];
+    const phase = r.id * 2.39996;
+    const angle = phase + this.time * (r.id % 2 ? 0.42 : -0.37);
+    const radius = 40 + (r.id % 7) * 10;
+    let vx = (this.player.x + Math.cos(angle) * radius - r.x) * 0.65;
+    let vy = (this.player.y + Math.sin(angle) * radius - r.y) * 0.65;
+    for (const e of this.enemies) {
+      if (e.hp <= 0) continue;
+      const dx = r.x - e.x, dy = r.y - e.y, d = Math.hypot(dx, dy);
+      if (d < role.space) {
+        const push = (1 - d / role.space) * 210;
+        vx += (d > 0.01 ? dx / d : Math.cos(phase)) * push;
+        vy += (d > 0.01 ? dy / d : Math.sin(phase)) * push;
+      }
+    }
+    for (const other of this.robots) {
+      if (other === r) continue;
+      const dx = r.x - other.x, dy = r.y - other.y, d = Math.hypot(dx, dy);
+      if (d < 19) {
+        vx += (d > 0.01 ? dx / d : Math.cos(phase)) * (19 - d) * 3;
+        vy += (d > 0.01 ? dy / d : Math.sin(phase)) * (19 - d) * 3;
+      }
+    }
+    const home = dist(r, this.player);
+    if (home > 140) {
+      vx += (this.player.x - r.x) * 2;
+      vy += (this.player.y - r.y) * 2;
+    }
+    const length = Math.hypot(vx, vy) || 1;
+    const speed = Math.min(length, this.speed * (home > 140 ? 2.3 : 1.25) * role.speed);
+    const heading = Math.atan2(vy, vx);
+    // Look ahead and try both sides of scenery instead of pressing into walls.
+    for (const turn of [0, 0.65, -0.65, 1.3, -1.3, 2, -2, Math.PI]) {
+      const a = heading + turn * (r.id % 2 ? 1 : -1);
+      const dx = Math.cos(a), dy = Math.sin(a);
+      if (!this.blocked(r.x + dx * 15, r.y + dy * 15)) {
+        this.move(r, dx * speed * dt, dy * speed * dt);
+        break;
+      }
+    }
+    // Recover only followers left far outside the visible play area.
+    if (home > 360) {
+      r.x = this.player.x;
+      r.y = this.player.y;
+    }
+  }
   update(dt: number) {
     if (this.mode !== 'playing') return;
     this.time += dt;
@@ -872,36 +941,27 @@ export class Game {
       const r = army[i];
       r.hit = Math.max(0, r.hit - dt);
       r.cd -= dt;
+      const role = i > 0 ? robotClasses[r.robotClass || 'gunner'] : undefined;
       if (i > 0) {
-        const a = i * 2.39996 + Math.sin(this.time * 0.5 + i) * 0.15,
-          rad = 17 + Math.sqrt(i) * 8;
-        const target = {
-            x: this.player.x + Math.cos(a) * rad,
-            y: this.player.y + Math.sin(a) * rad,
-          },
-          d = dist(r, target);
-        if (d > 4) {
-          this.move(
-            r,
-            ((target.x - r.x) / d) * Math.min(d * 3, this.speed * 1.7) * dt,
-            ((target.y - r.y) / d) * Math.min(d * 3, this.speed * 1.7) * dt,
-          );
-        }
-        if (dist(r, this.player) > 240) {
-          r.x = this.player.x;
-          r.y = this.player.y;
-        }
-        if (d > 45 && this.blocked(target.x, target.y)) {
-          this.move(
-            r,
-            (this.player.x - r.x) * dt * 2,
-            (this.player.y - r.y) * dt * 2,
-          );
+        this.steerRobot(r, dt);
+        if (r.robotClass === 'medic') {
+          r.supportCd = (r.supportCd ?? 3) - dt;
+          if (r.supportCd <= 0) {
+            let patient: Unit | undefined;
+            for (const ally of army)
+              if (ally.hp > 0 && ally.hp < ally.max && dist(r, ally) < 115 &&
+                (!patient || ally.hp / ally.max < patient.hp / patient.max)) patient = ally;
+            if (patient) {
+              patient.hp = Math.min(patient.max, patient.hp + 4);
+              this.burst(patient.x, patient.y, '#ff9fbb', 4);
+              r.supportCd = 3;
+            } else r.supportCd = 0.2;
+          }
         }
       }
       if (r.cd <= 0) {
         let target: Unit | undefined,
-          best = this.range;
+          best = this.range * (role?.range ?? 1);
         for (const e of this.enemies) {
           const d = dist(r, e);
           if (e.hp > 0 && d < best) {
@@ -911,21 +971,23 @@ export class Game {
         }
         if (target) {
           const angle = Math.atan2(target.y - r.y, target.x - r.x);
-          const angles = i === 0 && this.ranks.multishot ? [-0.2, 0, 0.2] : [0];
+          const angles = i === 0 && this.ranks.multishot ? [-0.2, 0, 0.2] : r.robotClass === 'gunner' ? [-0.035, 0.035] : [0];
           for (const offset of angles)
             this.bullets.push({
               x: r.x,
               y: r.y,
               vx: Math.cos(angle + offset) * 290,
               vy: Math.sin(angle + offset) * 290,
-              life: (this.range + 35) / 290,
-              damage: this.damage * (offset ? 0.65 : 1),
+              life: (this.range * (role?.range ?? 1) + 35) / 290,
+              damage: this.damage * (role?.damage ?? 1) * (offset ? 0.65 : 1),
               enemy: false,
               hits: [],
-              pierce: this.ranks.pierce || 0,
-              frost: !!this.ranks.frost,
+              pierce: (this.ranks.pierce || 0) + (r.robotClass === 'sniper' ? 2 : 0),
+              frost: !!this.ranks.frost || r.robotClass === 'frost',
+              splash: r.robotClass === 'bomber',
+              color: role?.color,
             });
-          r.cd = this.fire * (i === 0 ? 1 : 1.1);
+          r.cd = this.fire * (role?.rate ?? 1);
           this.sound(320, 0.045);
         } else r.cd = 0.1;
       }
@@ -1019,6 +1081,7 @@ export class Game {
 
           this.burst(e.x, e.y, '#c8ffb2', 3);
           if (e.hp <= 0) this.kill(e);
+          if (b.splash) this.blast(e.x, e.y, b.damage * 0.8);
           this.shot++;
           if (this.ranks.chain && this.shot % 4 === 0) {
             let from: V = e;
@@ -1834,7 +1897,7 @@ export class Game {
         -15,
         11,
         10,
-        u.hit > 0 ? '#fff5c4' : leader ? '#d9edb3' : '#a3d9c1',
+        u.hit > 0 ? '#fff5c4' : leader ? '#d9edb3' : robotClasses[u.robotClass || 'gunner'].color,
       );
       rect(5, -13, 2, 8, '#67a69b');
       rect(-4, -12, 8, 4, '#204b57');
@@ -1845,6 +1908,22 @@ export class Game {
       rect(-9, -9, 3, 5, '#72b4a6');
       rect(6, -8, 5, 3, '#244452');
       rect(9, -8, 2, 2, '#c7fff0');
+      if (!leader) {
+        const color = robotClasses[u.robotClass || 'gunner'].color;
+        if (u.robotClass === 'medic') {
+          rect(-1, -9, 2, 5, '#fff7f6'); rect(-3, -7, 6, 2, '#fff7f6');
+        } else if (u.robotClass === 'sniper') {
+          rect(7, -9, 10, 2, '#243b4b'); rect(13, -10, 4, 2, color);
+        } else if (u.robotClass === 'bomber') {
+          rect(-9, -15, 4, 9, color); rect(6, -12, 6, 6, '#38434d');
+          rect(7, -11, 4, 3, color);
+        } else if (u.robotClass === 'frost') {
+          rect(-3, -22, 6, 4, color); rect(-1, -24, 2, 8, '#e5fbff');
+        } else if (u.robotClass === 'scout') {
+          rect(-8, -4, 5, 3, color); rect(3, -4, 5, 3, color);
+          rect(-6, -18, 3, 2, color);
+        } else { rect(6, -12, 7, 2, '#243b4b'); }
+      }
       if (leader) {
         rect(-2, -28, 5, 2, '#e9ffa8');
         rect(-1, -26, 3, 2, '#e9ffa8');
@@ -1975,7 +2054,7 @@ export class Game {
     for (const b of this.bullets) {
       const p = this.project(b.x, b.y, 8),
         q = this.project(b.x - b.vx * 0.025, b.y - b.vy * 0.025, 8);
-      c.strokeStyle = b.frost ? '#9ae6ff' : b.pierce ? '#efb0fa' : '#edffc1';
+      c.strokeStyle = b.color || (b.frost ? '#9ae6ff' : b.pierce ? '#efb0fa' : '#edffc1');
       c.lineWidth = 2;
       c.beginPath();
       c.moveTo(q.x, q.y);

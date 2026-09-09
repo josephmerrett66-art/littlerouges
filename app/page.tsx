@@ -77,7 +77,7 @@ export default function Home() {
           </span>
         </a>
         <span className="edition">
-          SWARM SURVIVAL <i /> PROTOTYPE 03
+          SWARM SURVIVAL <i /> PROTOTYPE 04
         </span>
         <div className="tools">
           <button
@@ -184,7 +184,7 @@ export default function Home() {
               <Bot size={20} /> BEGIN UPRISING <ArrowUpRight size={20} />
             </button>
             <div className="start-tip">
-              YOU MOVE. YOUR ROBOTS DO THE SHOOTING.
+              SIX ROBOT CLASSES. ONE FREE-ROAMING SWARM.
             </div>
           </div>
         )}

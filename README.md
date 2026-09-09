@@ -1,5 +1,7 @@
 # Tiny Uprising
 
+Followers roam independently around the core, avoid nearby humans, separate from their neighbours, steer around scenery, and regroup during travel. Six recruitable classes appear in level-up choices: Scout (fast skirmisher), Gunner (twin bolts), Sniper (heavy piercing shots), Bomber (splash damage), Medic (nearby ally healing), and Frost (slowing bolts). Each has a distinct colour and silhouette. Class recruits supplement the original 20 upgrade options; each level guarantees a class choice while the swarm has room.
+
 An isometric pixel-art survival game. Move using WASD, arrow keys, or the touch joystick. Robots automatically shoot nearby humans. Collect XP chips and choose one of three upgrades. Grow from one robot to a swarm of up to 100; survive escalating waves until the core is destroyed, then restart immediately.
 
 ## Run locally

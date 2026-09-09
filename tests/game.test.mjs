@@ -164,6 +164,46 @@ const equip = (g, id) => {
   g.choices = [id];
   g.choose(id);
 };
+const roaming = fresh();
+roaming.collisionGrid.clear();
+roaming.addRobots(1, 'scout');
+const scout = roaming.robots[0];
+scout.x = 0; scout.y = 0;
+roaming.enemies = [roaming.unit(12, 0, 1000, 0)];
+roaming.steerRobot(scout, 0.1);
+assert(scout.x < 0, 'Scout evades an approaching human');
+roaming.enemies = [];
+const previous = { x: scout.x, y: scout.y };
+for (let i = 0; i < 300; i++) { roaming.time += 1 / 60; roaming.steerRobot(scout, 1 / 60); }
+assert(Math.hypot(scout.x - previous.x, scout.y - previous.y) > 15);
+assert(Math.hypot(scout.x, scout.y) < 180);
+for (let i = 0; i < 600; i++) {
+  roaming.player.x += 1; roaming.time += 1 / 60; roaming.steerRobot(scout, 1 / 60);
+}
+assert(Math.hypot(scout.x - roaming.player.x, scout.y) < 220, 'Bots regroup while travelling');
+for (const id of ['scout', 'gunner', 'sniper', 'bomber', 'medic', 'frost']) {
+  const squad = fresh();
+  equip(squad, `class_${id}`);
+  const bot = squad.robots[0];
+  assert.equal(bot.robotClass, id);
+  bot.x = 0; bot.y = 0; bot.cd = 0; bot.supportCd = 0;
+  squad.player.hp = 70;
+  squad.enemies = [squad.unit(80, 0, 1000, 0), squad.unit(82, 16, 1000, 0)];
+  squad.update(1 / 60);
+  const shot = squad.bullets[0];
+  assert(shot, `${id} attacks automatically`);
+  if (id === 'gunner') assert.equal(squad.bullets.length, 2);
+  if (id === 'sniper') { assert.equal(shot.pierce, 2); assert.equal(shot.damage, squad.damage * 3); }
+  if (id === 'frost') assert(shot.frost);
+  if (id === 'medic') assert.equal(squad.player.hp, 74);
+  if (id === 'bomber') {
+    assert(shot.splash);
+    for (let i = 0; i < 20; i++) squad.update(1 / 60);
+    assert(squad.enemies[1].hp < 1000, 'Bomber splash damages nearby humans');
+  }
+  squad.start(); assert.equal(squad.robots.length, 0);
+}
+console.log('Six robot classes, autonomous roaming, evasion and regrouping passed.');
 const shield = fresh();
 equip(shield, 'shield');
 shield.enemies = [shield.unit(0, 0, 100, 0)];
@@ -252,7 +292,7 @@ vacuum.start();
 assert.deepEqual(vacuum.ranks, {});
 assert.equal(vacuum.range, 155);
 assert.equal(vacuum.botHealth, 45);
-assert(Object.keys(upgrades).length === 20);
+assert(Object.keys(upgrades).length === 26);
 assert(g.props.length > 100);
 assert(g.props.some((p) => p.type === 'pool'));
 assert(g.props.some((p) => p.type === 'court'));
