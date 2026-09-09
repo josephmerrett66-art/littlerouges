@@ -1,0 +1,28 @@
+# Tiny Uprising
+
+An isometric pixel-art survival game. Move using WASD, arrow keys, or the touch joystick. Robots automatically shoot nearby humans. Collect XP chips and choose one of three upgrades. Grow from one robot to a swarm of up to 100; survive escalating waves until the core is destroyed, then restart immediately.
+
+## Run locally
+
+With Node 22.13+ and pnpm installed:
+
+```sh
+pnpm install
+pnpm dev
+```
+
+Open the local URL printed by the server. `P` or Escape pauses; the toolbar controls sound, pause, and restart. Switching away automatically pauses the run.
+
+## Validate
+
+```sh
+pnpm exec tsc --noEmit
+node tests/game.test.mjs
+pnpm build
+```
+
+The tests exercise automatic combat, XP, paused upgrades, all upgrade effects, death/reset, joystick direction, a simulated run, and a 100-robot stress test. The simulation is a simple XP-seeking bot, not a guarantee of human survival time.
+
+## Implementation
+
+`app/game.ts` owns the simulation, procedural pixel rendering, collision, and synthesized audio. `app/page.tsx` owns the responsive HUD, joystick, accessible upgrade dialogs, and optional WebMCP controls. Art is drawn by the canvas engine, with no downloaded assets or runtime API dependencies. There is one map and no permanent progression. Browser audio starts after the first user interaction.
